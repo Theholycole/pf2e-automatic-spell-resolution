@@ -42487,33 +42487,40 @@ export const cases = {
         } catch (error) { out.error = error.stack ?? error.message; }
         const s = out.silencing ?? {}, b = out.bolt ?? {};
         out.listed = [...(ctx.api.castFromItemOptions ?? [])];
-        assert(!out.error && JSON.stringify(out.listed) === '["attackDegree","saveFirst"]' && JSON.stringify(s.saves) === '[["ammo quiet",1],["ammo loud",3]]' && s.message && JSON.stringify(s.targets) === '["ammo quiet"]'
+        assert(!out.error && JSON.stringify(out.listed) === '["attackDegree","saveFirst"]' && JSON.stringify(s.saves?.map(([name, degree]) => [name, degree <= 1 ? 'fails' : degree])) === '[["ammo quiet","fails"],["ammo loud",3]]' && s.message && JSON.stringify(s.targets) === '["ammo quiet"]'
             && out.resisted?.resisted && out.resisted.message === null && b.attack === 'criticalSuccess' && /Disintegration Bolt's hit/.test(b.label ?? '') && b.dc === 34
             && out.ammo?.statistic === 'spell-attack' && out.ammo.degree === 'criticalSuccess' && /Spellstrike Ammunition's hit/.test(out.ammo.hit ?? ''), `castFromItem options: ${JSON.stringify(out)}`);
         return {castFromItemOptions: out};
     },
-    // Mythic casts (the user, 2026-10-19): an NPC with the mythic trait and 1 Mythic Point casts Freedom — 0 left and the chat line; a second cast is refused
-    // before PF2e casts (no cast message); a spell without the trait costs nothing.
+    // Mythic casts (the user, 2026-10-19): Fear given the mythic trait, cast by an NPC with 1 Mythic Point — 0 left and the chat line; a second cast is
+    // refused before PF2e casts (no cast message); a spell without the trait costs nothing. (Not Freedom: it's a ritual, cast another way.)
     async mythicCost(ctx) {
         const wait = ms => new Promise(r => setTimeout(r, ms));
         const out = {};
         try {
-            const fixture = await ctx.setup('Freedom');
+            const fixture = await ctx.setup('Fear');
+            // (PF2e gives an NPC Mythic Points only with the mythic trait; the spell's own trait is what costs one.)
             await fixture.caster.update({'system.traits.value': [...new Set([...(fixture.caster.system.traits.value ?? []), 'mythic'])]}); await wait(300);
+            await fixture.spell.update({'system.traits.value': [...new Set([...(fixture.spell.system.traits.value ?? []), 'mythic'])]}); await wait(300);
             await fixture.caster.update({'system.resources.mythicPoints.value': 1}); await wait(300);
-            const casts = () => game.messages.contents.filter(m => m.flags?.pf2e?.context?.type === 'spell-cast' && m.actor === fixture.caster).length;
-            const before = casts();
-            out.start = {points: fixture.caster.system.resources?.mythicPoints?.value ?? null, max: fixture.caster.system.resources?.mythicPoints?.max ?? null};
+            const mark = game.messages.contents.length;
+            const casts = () => game.messages.contents.slice(mark).filter(m => (m.flags?.pf2e?.context?.type === 'spell-cast' || m.flags?.pf2e?.casting) && m.speaker?.actor === fixture.caster.id).length;
+            out.start = {points: fixture.caster.system.resources?.mythicPoints?.value ?? null, max: fixture.caster.system.resources?.mythicPoints?.max ?? null, mythic: fixture.spell.system.traits.value.includes('mythic')};
             await fixture.spell.spellcasting.cast(fixture.spell, {consume: false}); await wait(1500);
-            out.first = {casts: casts() - before, points: fixture.caster.system.resources.mythicPoints.value,
-                line: game.messages.contents.slice(-4).some(m => /spends 1 Mythic Point to cast/.test(m.content ?? ''))};
+            out.first = {casts: casts(), points: fixture.caster.system.resources.mythicPoints.value,
+                line: game.messages.contents.slice(mark).some(m => /spends 1 Mythic Point to cast/.test(m.content ?? ''))};
             let refused = null;
             try { await fixture.spell.spellcasting.cast(fixture.spell, {consume: false}); } catch (error) { refused = error.message; }
             await wait(800);
-            out.second = {refused, casts: casts() - before};
+            out.second = {refused, casts: casts()};
+            // Without the trait: no cost, cast as usual.
+            await fixture.spell.update({'system.traits.value': fixture.spell.system.traits.value.filter(trait => trait !== 'mythic')}); await wait(300);
+            await fixture.spell.spellcasting.cast(fixture.spell, {consume: false}); await wait(1200);
+            out.plain = {casts: casts(), points: fixture.caster.system.resources.mythicPoints.value};
         } catch (error) { out.error = error.stack ?? error.message; }
-        const f = out.first ?? {}, s = out.second ?? {};
-        assert(!out.error && out.start?.points === 1 && f.casts === 1 && f.points === 0 && f.line && /no Mythic Point to spend/.test(s.refused ?? '') && s.casts === 1, `Mythic cost: ${JSON.stringify(out)}`);
+        const f = out.first ?? {}, s = out.second ?? {}, p = out.plain ?? {};
+        assert(!out.error && out.start?.points === 1 && out.start.mythic && f.casts === 1 && f.points === 0 && f.line && /no Mythic Point to spend/.test(s.refused ?? '') && s.casts === 1
+            && p.casts === 2 && p.points === 0, `Mythic cost: ${JSON.stringify(out)}`);
         return {mythicCost: out};
     },
     // PF2e's grimoires and instruments, batch 1 (the user: build all 16, 2026-10-19): Instructions for Lasting Agony (Void Warp: a failed save, Sickened 1),
@@ -42568,10 +42575,12 @@ export const cases = {
             out.horrify = {frightened: foe.getCondition('frightened')?.value ?? 0, persistent: mental ? `${mental.system.persistent.formula} mental` : null};
             await reset();
             await arm("Mocker's Swazzle");
+            // (Its Will before Fear frightens it.)
+            const will = Number(foe.saves.will.mod);
             cast = await castNow('Fear', 1);
             const mockCard = await open(cast, 'Fear', 1);
             const mocked = await settle(mockCard, 'success');
-            out.mocking = {penalty: Number(mocked.roll?.options?.totalModifier ?? NaN) - Number(foe.saves.will.mod), offGuard: foe.hasCondition('off-guard')};
+            out.mocking = {penalty: Number(mocked.state.targets[0].saveModifier ?? NaN) - will, offGuard: foe.hasCondition('off-guard')};
             await reset();
             await arm('Book of Lingering Blaze');
             cast = await castNow('Fireball', 3);
@@ -42638,21 +42647,28 @@ export const cases = {
         const castNow = async (name, rank) => { const mark = game.messages.size; const sp = spell(name); await sp.spellcasting.cast(sp, {rank, consume: false});
             return until(() => { const c = game.messages.contents.slice(mark).find(m => m.flags?.pf2e?.casting && m.actor === caster); return c?.getFlag(NSX, 'shaping') ? c : null; }); };
         const open = async (cast, name, rank, token) => { const sp = spell(name); const r = await ctx.api.saves.start(sp, {plan: await ctx.api.compile(sp), sourceActor: caster, targets: [token.object ?? token], castRank: rank, skipConfirmation: true, sourceMessageId: cast.id}); return r.card ?? r; };
-        const settle = async (card, degree) => { const t = ctx.state(card).targets[0]; const roll = await ctx.api.saves.rollSave(card, t.id, {skipDialog: true}); await ctx.api.saves.correctTarget(card, t.id, {action: 'degree', degree});
-            await ctx.api.saves.finalize(card); await wait(2500); return roll; };
+        const settle = async (card, degree, {affected = false} = {}) => { const t = ctx.state(card).targets[0];
+            // (Banishment: the GM confirms it's away from its home plane, and answers its question — none of its bonuses apply.)
+            if (affected) await ctx.api.saves.correctTarget(card, t.id, {action: 'affected'});
+            if (ctx.state(card).attackAdjustment) await ctx.api.saves.correctTarget(card, t.id, {action: 'attack-adjustment', degree: '0'});
+            await ctx.api.saves.rollSave(card, t.id, {skipDialog: true}); await ctx.api.saves.correctTarget(card, t.id, {action: 'degree', degree});
+            await ctx.api.saves.finalize(card); await wait(2500); return ctx.state(card).targets[0]; };
         const reset = async () => { for (const a of [foe, demon]) { await a.update({'system.attributes.hp.value': 500}); for (const e of [...a.itemTypes.effect, ...a.itemTypes.condition]) if (a.items.get(e.id)) await e.delete().catch(() => null); } await wait(400); };
         try {
             tFoe.object?.setTarget(true, {releaseOthers: true});
             await arm("Courtier's Pillow Book");
+            // (Its Will before Fear frightens it.)
+            const will = Number(foe.saves.will.mod);
             let cast = await castNow('Fear', 1);
             let roll = await settle(await open(cast, 'Fear', 1, tFoe), 'success');
-            out.courtier = Number(roll?.options?.totalModifier ?? NaN) - Number(foe.saves.will.mod);
+            out.courtier = Number(roll?.saveModifier ?? NaN) - will;
             await reset();
             tDemon.object?.setTarget(true, {releaseOthers: true});
             await arm('What Doors We Open', {activation: 0});
+            const demonWill = Number(demon.saves.will.mod);
             cast = await castNow('Banishment', 5);
-            roll = await settle(await open(cast, 'Banishment', 5, tDemon), 'success');
-            out.castOut = Number(roll?.options?.totalModifier ?? NaN) - Number(demon.saves.will.mod);
+            roll = await settle(await open(cast, 'Banishment', 5, tDemon), 'success', {affected: true});
+            out.castOut = Number(roll?.saveModifier ?? NaN) - demonWill;
             await reset();
             await arm('Folding Drums');
             cast = await castNow('Courageous Anthem', 10);
