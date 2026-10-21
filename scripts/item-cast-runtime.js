@@ -299,9 +299,29 @@ export function spellDurationSeconds(source) {
  * cast. `spell` is a spells-srd UUID or a spell source; `rank` the item's, else the spell's own (a cantrip at half the actor's level); `targets` the tokens
  * (the actor's own for "on you"); `item` {name, uuid}. The entry, the spell and its numbers' Effect are temporary: removed once the spell's duration has passed
  * (at least 10 minutes, at most an hour of world time) or as the encounter ends — nothing stays on the sheet.
+ * - `attackDegree` ("success" | "criticalSuccess"): the item's own hit stands in for the spell's attack roll — any spell attack spell's card records it on each
+ *   target (Spellstrike Ammunition); Disintegrate's card starts with it, a critical hit making the save one degree worse as the spell says (Disintegration Bolt).
+ * - `saveFirst` ({statistic, dc}): the item's save before the spell, which has none of its own (Silencing Shot: "… subject to the effects of a 4th-rank Silence
+ *   spell unless it succeeds at a DC 25 Will save") — each target rolls it; the spell is cast on those that fail, and not at all when none does.
  */
-export async function castSpellForItem({ actor, token = null, spell, rank = null, dc = null, counteract = null, targets = null, item = null } = {}) {
+export async function castSpellForItem({ actor, token = null, spell, rank = null, dc = null, counteract = null, targets = null, item = null, attackDegree = null, saveFirst = null } = {}) {
     if (!actor) throw new Error("castFromItem: the actor is missing.");
+    if (attackDegree != null && !["success", "criticalSuccess"].includes(attackDegree)) throw new Error("castFromItem: attackDegree is \"success\" or \"criticalSuccess\" (a hit).");
+    let saves = null;
+    if (saveFirst != null) {
+        const statistic = String(saveFirst.statistic ?? "").toLowerCase(), saveDC = Number(saveFirst.dc);
+        if (!["fortitude", "reflex", "will"].includes(statistic) || !(saveDC > 0)) throw new Error("castFromItem: saveFirst is {statistic: fortitude|reflex|will, dc}.");
+        if (!(targets ?? []).length) throw new Error("castFromItem: saveFirst needs the targets.");
+        saves = [];
+        for (const target of targets) {
+            const targetActor = target?.actor ?? target?.document?.actor ?? null;
+            const roll = targetActor ? await targetActor.saves?.[statistic]?.roll({ dc: { value: saveDC }, skipDialog: true }) : null;
+            saves.push({ target, name: targetActor?.name ?? null, degree: Number(roll?.degreeOfSuccess ?? -1) });
+        }
+        // (Those that fail are subject to the spell; the rest are untouched.)
+        targets = saves.filter(entry => entry.degree >= 0 && entry.degree <= 1).map(entry => entry.target);
+        if (!targets.length) return { message: null, resisted: true, saves: saves.map(({ name, degree }) => ({ name, degree })) };
+    }
     const uuid = typeof spell === "string" ? spell : spell?.uuid ?? spell?._stats?.compendiumSource ?? spell?.flags?.core?.sourceId ?? null;
     const source = typeof spell === "string" ? (await fromUuid(spell))?.toObject() : spell ? foundry.utils.deepClone(spell.toObject?.() ?? spell) : null;
     if (source?.type !== "spell") throw new Error("castFromItem: the spell isn't a spell (a spells-srd UUID or its source).");
@@ -344,11 +364,11 @@ export async function castSpellForItem({ actor, token = null, spell, rank = null
     for (let i = 0; i < 40 && !message; i++) { message = game.messages.contents.slice(mark).find(entry => isCastMessage(entry) && entry.actor === actor); if (!message) await new Promise(resolve => setTimeout(resolve, 250)); }
     if (message) {
         await message.setFlag(MODULE_ID, "castFromItem", { itemName: holder.name, itemUuid, rank: castRank, dc: numbers.dc, counteract: counteract != null ? Number(counteract) : null,
-            targets: tokens.map(entry => entry.document?.uuid ?? entry.uuid).filter(Boolean) }).catch(() => null);
+            targets: tokens.map(entry => entry.document?.uuid ?? entry.uuid).filter(Boolean), ...(attackDegree ? { attackDegree } : {}) }).catch(() => null);
         // (The card's header names the item.)
         await message.update({ flavor: `<strong>${escapeHTML(holder.name)}</strong>${message.flavor ? ` ${message.flavor}` : ""}` }).catch(() => null);
     }
-    return { message, rank: castRank, numbers, spellUuid: made.uuid, until };
+    return { message, rank: castRank, numbers, spellUuid: made.uuid, until, ...(saves ? { saves: saves.map(({ name, degree }) => ({ name, degree })) } : {}) };
 }
 
 /** The temporary items of the casts made for other modules whose time has passed (or all of them, `force`): removed, their spells' sources kept for the casts' records. */

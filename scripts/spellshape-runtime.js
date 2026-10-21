@@ -7,6 +7,7 @@ import { readSpellshapeFeat, readWand, unmetRequirement } from "../src/compiler/
 import { applyDamageWithReceipt } from "./native-damage-receipt.js";
 import { loadNativeEffectTemplate, prepareNativeEffectSource, createNativeEffect } from "./native-outcome-effects.js";
 import { tokenDistance } from "./token-distance.js";
+import { grantSummonBenefit } from "./summon-benefits.js";
 import { forcedMove, adjacentFreeSpace } from "./forced-movement.js";
 import { isThrall, destroyThrall } from "./thrall-tokens.js";
 import { grantMinionControl } from "./minion-control-runtime.js";
@@ -512,6 +513,30 @@ async function applyCastRiders(actor, message, shapes, facts, spell, rank) {
             }
         } else if (rider.type === "self-conditions") {
             results.push(...await timedConditions(actor, rider.list, shape.name, { caster: actor }));
+        } else if (rider.type === "restore-prepared") {
+            // (Arclord's Codex: "You regain access to two spells of 4th rank or lower or one spell of 5th rank or higher that you've prepared and already cast
+            // today." — the caster's expended prepared slots, picked: up to the count of one of the two sizes; the slot this cast spent isn't one of them.)
+            const slots = [];
+            for (const entry of (actor.itemTypes?.spellcastingEntry ?? []).filter(item => item.isPrepared ?? item.system?.prepared?.value === "prepared"))
+                for (const [key, slot] of Object.entries(entry.system?.slots ?? {})) (slot.prepared ?? []).forEach((prepared, index) => {
+                    const slotRank = Number(key.replace("slot", ""));
+                    if (!prepared?.id || !prepared.expended || slotRank < 1 || (prepared.id === spell?.id && slotRank === Number(rank))) return;
+                    slots.push({ value: `${entry.id}|${key}|${index}`, rank: slotRank, label: `Rank ${slotRank}: ${actor.items.get(prepared.id)?.name ?? "a prepared spell"} (${entry.name})` });
+                });
+            const fits = picked => rider.either.some(option => picked.length <= option.count && picked.every(slot => (option.maxRank == null || slot.rank <= option.maxRank) && (option.minRank == null || slot.rank >= option.minRank)));
+            if (!slots.length) { results.push({ label: `${shape.name}: no prepared spell already cast today`, status: "skipped" }); continue; }
+            const preset = Array.isArray(shape.choice) ? slots.filter(slot => shape.choice.includes(slot.value)) : null;
+            const sizes = rider.either.map(option => `${option.count} of ${option.maxRank != null ? `rank ${option.maxRank} or lower` : `rank ${option.minRank} or higher`}`).join(", or ");
+            const chosen = preset ?? await foundry.applications.api.DialogV2.prompt({ window: { title: `${shape.name}: spells regained` }, rejectClose: false,
+                content: `<p>Pick ${escapeHTML(sizes)}.</p>${slots.map(slot => `<label><input type="checkbox" name="${escapeHTML(slot.value)}"> ${escapeHTML(slot.label)}</label>`).join("<br>")}`,
+                ok: { label: "Regain", callback: (_event, button) => slots.filter(slot => button.form.elements[slot.value]?.checked) } });
+            if (!chosen?.length) { results.push({ label: `${shape.name}: no spell regained`, status: "skipped" }); continue; }
+            if (!fits(chosen)) { results.push({ label: `${shape.name}: pick ${sizes}`, status: "failed" }); continue; }
+            for (const slot of chosen) {
+                const [entryId, key, index] = slot.value.split("|");
+                await actor.items.get(entryId)?.update({ [`system.slots.${key}.prepared.${index}.expended`]: false });
+            }
+            results.push({ label: `${shape.name}: regained ${chosen.map(slot => slot.label).join("; ")}`, status: "applied" });
         } else if (rider.type === "self-increase") {
             // (Invoke Infernal Potency: "You then increase the value of your doomed condition by 1.")
             const before = Number(actor.getCondition?.(rider.slug)?.value ?? 0);
@@ -948,6 +973,11 @@ export async function shapeSummonedAfter(messageId, caster, summoned, context = 
     for (const shape of shaping?.shapes ?? []) for (const rider of shape.riders ?? []) if (rider.type === "colossal" && summoned) results.push(...await colossalSummon(shape, rider, caster, summoned, context));
     // (Shadow Ash: the undead's shroud of frost.)
     for (const shape of shaping?.shapes ?? []) for (const rider of shape.riders ?? []) if (rider.type === "summoned-shroud" && summoned) results.push(...await catalystSummoned(shape, rider, caster, summoned) ?? []);
+    // (Tyrant's Writs: the caster's pick of the undead's benefit — summon-benefits.js.)
+    for (const shape of shaping?.shapes ?? []) for (const rider of shape.riders ?? []) if (rider.type === "summon-benefit" && summoned) {
+        const dc = Number(context.itemOrSource?.spellcasting?.statistic?.dc?.value ?? context.dc ?? NaN);
+        results.push(...await grantSummonBenefit(shape, rider, summoned, { dc, casterUuid: caster?.uuid ?? null, choose: riderChoice }));
+    }
     // (Aspect Sage: an aspect ability it doesn't have — the actions in the module's aspect folders — picked (or given as the armed choice: its uuid or name).)
     for (const shape of shaping?.shapes ?? []) for (const rider of shape.riders ?? []) if (rider.type === "aspect-ability" && summoned) {
         const have = new Set(summoned.items.map(item => item.name));
@@ -1470,6 +1500,34 @@ export async function applyShapeRiders(state, target, actor, token, { DamageRoll
                 const receipt = await applyDamageWithReceipt(other.actor, { damage: roll, token: other, skipIWR: false, rollOptions: new Set() }, foundry.utils.randomID());
                 results.push({ label: `${shape.name}: ${other.name} takes ${receipt.damage} ${type} splash`, status: "applied" });
             }
+            continue;
+        }
+        if (rider.type === "persistent-condition") {
+            // (Corrosive Engravings: "any creature who takes persistent damage from the spell is also Sickened 2 until the persistent damage ends" — an Effect granting it,
+            // removed with that persistent damage (persistent-link-runtime.js); retching's floor the GM's.)
+            const types = shape.requires?.damageTypesAny ?? (shape.requires?.damageType ? [shape.requires.damageType] : []);
+            const persistent = (actor.itemTypes?.condition ?? []).find(entry => entry.slug === "persistent-damage" && (!types.length || types.includes(entry.system?.persistent?.damageType)));
+            if (!persistent) continue;
+            const damageType = persistent.system.persistent.damageType;
+            const label = rider.list.map(entry => `${entry.slug}${entry.value ? ` ${entry.value}` : ""}`).join(", ");
+            const [made] = await actor.createEmbeddedDocuments("Item", [{ name: `${shape.name}: ${label} while the persistent ${damageType} damage lasts`, type: "effect", img: "icons/svg/acid.svg",
+                flags: { [MODULE_ID]: { spellshapeRider: { label: shape.name }, runtime: { schema: 1, kind: "persistent-condition", castInstanceId: state.castId, sourceActorUuid: state.sourceActorUuid, sourceItemName: shape.name,
+                    persistentLink: { damageType } } } },
+                system: { duration: { value: -1, unit: "unlimited", expiry: null, sustained: false }, start: { value: game.time.worldTime, initiative: game.combat?.combatant?.initiative ?? null }, tokenIcon: { show: true },
+                    description: { value: `<p>${escapeHTML(label)} until the persistent ${escapeHTML(damageType)} damage ends.${rider.floor ? ` Retching can lower it, but not below ${escapeHTML(rider.floor)} until then (lower it by hand).` : ""}</p>` },
+                    rules: rider.list.map(entry => ({ key: "GrantItem", uuid: entry.uuid, onDeleteActions: { grantee: "cascade" }, ...(entry.value ? { alterations: [{ mode: "override", property: "badge-value", value: entry.value }] } : {}) })) } }]);
+            results.push({ label: `${shape.name}: ${label} while the persistent ${damageType} damage lasts`, status: "applied", effectUuid: made?.uuid ?? null });
+            continue;
+        }
+        if (rider.type === "degree-note") {
+            // (Draxie's Recipe Book: "all creatures within the spell's area who don't critically succeed at their save are covered with a spicy red powder" — a note
+            // Effect with what it does, until the creature cleans itself.)
+            if (!rider.degrees.includes(degree)) continue;
+            const [made] = await actor.createEmbeddedDocuments("Item", [{ name: `${shape.name}: ${rider.label}`, type: "effect", img: "icons/svg/aura.svg",
+                flags: { [MODULE_ID]: { spellshapeRider: { label: shape.name } } },
+                system: { duration: { value: -1, unit: "unlimited", expiry: null, sustained: false }, start: { value: game.time.worldTime, initiative: game.combat?.combatant?.initiative ?? null }, tokenIcon: { show: true },
+                    description: { value: rider.text.map(text => `<p>${escapeHTML(text)}</p>`).join("") }, rules: [] } }]);
+            results.push({ label: `${shape.name}: ${rider.label}`, status: "applied", effectUuid: made?.uuid ?? null });
             continue;
         }
         if (rider.type === "conditions") {

@@ -1,4 +1,5 @@
 import { MODULE_ID } from './effect-runtime.js';
+import { mythicCastCheck, spendMythicCast } from './mythic-cost.js';
 export function activeManagedForm(actor) {
     if(!actor?.flags?.pf2e?.battleForm)return null;
     return actor?.items?.find(item => item.type === 'effect' && item.getFlag(MODULE_ID, 'formCastId') && !item.isExpired && item.system.rules.some(r => r.key === 'BattleForm'));
@@ -40,7 +41,12 @@ export function installFormGuards() {
     });
     wrapMethod('CONFIG.PF2E.Item.documentClasses.spellcastingEntry.prototype.cast',function(cast,...args){
         if(activeManagedForm(this.actor))throw Error('This battle form prevents spellcasting. Dismiss it before casting. No resource was spent.');
-        return cast(...args);
+        // (A mythic spell costs a Mythic Point — or a Hero Point with the item module's setting —: refused here when the caster has none; the GM's Shift-click
+        // passes. mythic-cost.js.)
+        const due=mythicCastCheck(this.actor,args[0],{bypass:game.user?.isGM===true&&globalThis.event?.shiftKey===true});
+        if(!due)return cast(...args);
+        const actor=this.actor,spell=args[0];
+        return Promise.resolve(cast(...args)).then(async result=>{await spendMythicCast(actor,spell,due);return result;});
     },'MIXED');
     wrapMethod('CONFIG.PF2E.Item.documentClasses.consumable.prototype.consume',function(consume,...args){
         if(activeManagedForm(this.actor))throw Error('Gear is absorbed in this battle form; item activation is unavailable.');

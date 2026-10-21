@@ -29,6 +29,7 @@ import { isStrikeDamage } from "../src/compiler/ward-families.js";
 import { BasicSaveRuntime, situationalCurseSync } from "./basic-save-runtime.js";
 import { holdCurseStage, curseCreatureCheck, curseCreatureSlain } from "./curse-creature.js";
 import { suppressionSave, suppressionEnded } from "./suppression-save-runtime.js";
+import { explodeAtZero, rottenTurnStart } from "./summon-benefits.js";
 import { EscapeTermination } from "./escape-termination.js";
 import { AfflictionCareRuntime } from "./affliction-care-runtime.js";
 import { MessageRuntime } from "./message-runtime.js";
@@ -1558,6 +1559,8 @@ Hooks.once("init", () => {
             creatureAbilities: { read: source => readCreatureSpellAbility(source), onCast: message => creatureAbilitiesOnCast(message), run: message => runCreatureAbility(message) },
             // (Another module's item casting a spell — the item module's consumables: cast through PF2e from a temporary entry with the item's numbers.)
             castFromItem: options => castSpellForItem(options),
+            // (The options castFromItem takes beyond the basics, for other modules to check before passing them: an older module ignores unknown keys.)
+            castFromItemOptions: Object.freeze(["attackDegree", "saveFirst"]),
             // (The items this module acts on — scrolls, wands, staves, spellhearts, catalysts, and what its item readers read — for other modules to leave alone.)
             claims: source => itemClaimed(source?.toObject?.() ?? source), claimsWhy: source => itemClaims(source?.toObject?.() ?? source),
             itemCasts: { read: source => readItemCasts(source), offer: item => offerItemCasts(item), cast: (item, index, options) => castFromItem(item, index, options), reservoir: (message, action) => runReservoirButton(message, action) },
@@ -2077,6 +2080,9 @@ Hooks.on("preUpdateItem", (item, changes) => { try { markEffectGmNotesUpdate(ite
 Hooks.on("preUpdateItem", (item, changes) => { try { holdCurseStage(item, changes); } catch (error) { console.warn(`${MODULE_ID} | The curse's stage hold failed.`, error); } });
 for (const event of ["createItem", "updateItem"]) Hooks.on(event, item => { if (item?.flags?.[MODULE_ID]?.stageCreature) void curseCreatureCheck(item).catch(error => notifyError("The curse's creature failed", error)); });
 Hooks.on("updateActor", actor => { if (actor?.flags?.[MODULE_ID]?.curseCreature) void curseCreatureSlain(actor).catch(error => notifyError("The curse's ending failed", error)); });
+// Tyrant's Writs: an Explosive undead at 0 Hit Points explodes; a Rotten one hurts the wounded living creatures starting their turns beside it.
+Hooks.on("updateActor", actor => { if ((actor?.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.summonBenefit?.kind === "explosive")) void explodeAtZero(actor).catch(error => notifyError("The undead's explosion failed", error)); });
+Hooks.on("updateCombat", (combat, changes) => { if ("turn" in changes || "round" in changes) void rottenTurnStart(combat).catch(error => notifyError("The rotten undead's damage failed", error)); });
 // Rude Awakening: what the ally suppressed comes back when the spell's Effect ends, if it would still apply.
 Hooks.on("deleteItem", (item, options) => { if (item?.flags?.[MODULE_ID]?.suppressionSave?.suppressed) void suppressionEnded(item, options).catch(error => notifyError("The suppressed effect's return failed", error)); });
 Hooks.once("ready", () => { void markExistingGmNotes().catch(error => console.warn(`${MODULE_ID} | GM note marking failed.`, error)); });

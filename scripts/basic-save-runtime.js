@@ -915,7 +915,7 @@ function movementNote(state, target) {
 
 function saveResultBadge(target) {
     if (!target.degree) return "Not rolled";
-    const total = target.saveTotal == null ? "" : `<strong>${escapeHTML(target.saveTotal)}</strong> `;
+    const total = target.saveTotal == null ? (target.itemHit ? `<strong>${escapeHTML(target.itemHit)}</strong> ` : "") : `<strong>${escapeHTML(target.saveTotal)}</strong> `;
     const breakdown = target.saveNatural == null || target.saveModifier == null
         ? ""
         : `<small>d20 ${escapeHTML(target.saveNatural)} ${target.saveModifier >= 0 ? "+" : "−"}${escapeHTML(Math.abs(target.saveModifier))}</small>`;
@@ -2727,6 +2727,14 @@ export class BasicSaveRuntime {
             const mythic = mythicDC(state, sourceActor, spell);
             if (mythic) { state.dcBeforeMythic = state.dc; state.dc = mythic; }
         }
+        // (An item's hit standing in for the spell attack roll — castFromItem's attackDegree: Spellstrike Ammunition, a bolt — recorded on each target as its result.)
+        const itemHit = options.sourceMessageId ? game.messages.get(options.sourceMessageId)?.getFlag(MODULE_ID, "castFromItem") : null;
+        if (state.saveStatistic === "spell-attack" && ["success", "criticalSuccess"].includes(itemHit?.attackDegree)) {
+            for (const target of state.targets.filter(targetParticipates)) {
+                recordProvisionalSave(state, target.id, { degree: itemHit.attackDegree, timestamp: Date.now(), messageId: null });
+                target.itemHit = `${itemHit.itemName}'s hit`;
+            }
+        }
         const card = await ChatMessage.create({
             speaker: ChatMessage.getSpeaker({ actor: sourceActor }),
             content: `<section class="pf2e-auto-runtime-card"><p>Preparing ${escapeHTML(plan.source.name)}…</p></section>`,
@@ -3991,6 +3999,11 @@ export class BasicSaveRuntime {
                 // (The card's own one-time modifier, on the primary save.)
                 if (stage !== "secondary" && state.cardSaveModifier) modifiers.push(new game.pf2e.Modifier({ slug: "card-save-modifier", label: state.cardSaveModifier.label || state.spellName,
                     modifier: state.cardSaveModifier.value, type: state.cardSaveModifier.type }));
+                // (A spellshape's penalty to the target's save against the spell — Mocking Spell, Courtier's Pillow Book, Cast Out's −3 against a demon.)
+                if (stage !== "secondary") for (const [index, rider] of (state.shapeRiders ?? []).flatMap(shape => (shape.riders ?? []).filter(entry => entry.type === "save-penalty").map(entry => ({ ...entry, shapeName: shape.name }))).entries()) {
+                    const traitValue = Object.entries(rider.vsTraits ?? {}).find(([trait]) => actor.traits?.has?.(trait) ?? (actor.system?.traits?.value ?? []).includes(trait))?.[1];
+                    modifiers.push(new game.pf2e.Modifier({ slug: `shape-save-penalty-${index}`, label: rider.shapeName, modifier: Number(traitValue ?? rider.value), type: rider.penaltyType ?? "circumstance" }));
+                }
                 return modifiers.length ? { modifiers } : {};
             })(),
             createMessage: false,

@@ -11,6 +11,8 @@ import { readCatalyst } from "./catalysts.js";
 import { CONDITION_LINK_HYPHENATED as COND, plain, sentenceSplit as split } from "./text-patterns.js";
 
 const LINK = String.raw`@UUID\[(Compendium\.pf2e\.[a-z-]+\.Item\.[A-Za-z0-9]+)\]\{([^}]+)\}`;
+// (Spells an item names by their pre-remaster names, and what PF2e calls them now.)
+const REMASTERED = { "Animate Dead": ["Summon Undead"] };
 const unlinkAction = text => text.replace(/@UUID\[Compendium\.pf2e\.actionspf2e\.Item\.[A-Za-z0-9]+\]\{([^}]+)\}/g, "$1");
 const ORDINAL = String.raw`(\d+)(?:st|nd|rd|th)`;
 const cond = (uuid, slug, value = null, extra = {}) => ({ uuid, slug: slug.toLowerCase(), value: value == null ? null : Number(value), ...extra });
@@ -20,7 +22,10 @@ export function readItemRequirements(text) {
     const requires = {};
     let rest = unlinkAction(text).trim();
     // ("prepared from this grimoire": the spell must be prepared — PF2e's entry says — and from this book, the table's.)
-    if (/ prepared from this grimoire\b/.test(rest)) { requires.prepared = true; requires.table = ["prepared from this grimoire"]; rest = rest.replace(/ prepared from this grimoire\b/, ""); }
+    if (/ prepared from this grimoire\b/.test(rest)) { requires.prepared = true; requires.table = ["prepared from this grimoire"]; rest = rest.replace(/(?: that you)? prepared from this grimoire\b/, ""); }
+    // ("a Spell to cast an animate dead spell prepared with tyrant's writs": that spell, prepared from the item.)
+    const preparedWith = / prepared with ([a-z' ]+)$/.exec(rest);
+    if (preparedWith) { requires.prepared = true; requires.table = [...(requires.table ?? []), `prepared with ${preparedWith[1]}`]; rest = rest.slice(0, preparedWith.index).replace(/^a Spell to cast /, ""); }
     if (/^(?:a |an )?prepared /i.test(rest)) { requires.prepared = true; rest = rest.replace(/^(a |an )?prepared /i, "$1"); }
     const table = text => { requires.table = [...(requires.table ?? []), text]; };
     let m;
@@ -40,9 +45,35 @@ export function readItemRequirements(text) {
     else if ((m = /^a spell that has the ([a-z]+) trait$/i.exec(rest))) requires.anyTraits = [m[1]];
     else if ((m = new RegExp(`^a ${LINK}, ${LINK}, or ${LINK} spell$`).exec(rest))) requires.spells = [m[2], m[4], m[6]];
     else if (/^a spell your familiar learned from a lesson \(whether a cantrip or from a spell slot\)$/.test(rest)) table("a spell your familiar learned from a lesson");
+    // (PF2e's grimoires and instruments, 2026-10-19.)
+    else if ((m = /^(?:a |an )?([a-z]+) Spell that allows a saving throw$/i.exec(rest))) { requires.anyTraits = [m[1].toLowerCase()]; requires.saves = ["fortitude", "reflex", "will"]; }
+    else if ((m = /^(?:a |an )?spell with the ([a-z]+) trait that requires a saving throw$/i.exec(rest))) { requires.anyTraits = [m[1]]; requires.saves = ["fortitude", "reflex", "will"]; }
+    else if ((m = /^(?:a |an )?([a-z]+) spell that targets only that creature$/.exec(rest))) { requires.anyTraits = [m[1]]; requires.singleTarget = true; table("it targets only that creature"); }
+    else if ((m = /^(?:a |an )?([a-z]+) spell on a target about whom you've written an entry in the book$/.exec(rest))) { requires.anyTraits = [m[1]]; requires.singleTarget = true; table("its target has an entry in the book"); }
+    else if ((m = /^(?:a |an )?([a-z]+) cantrip that has an? (burst|cone|emanation|line)$/.exec(rest))) { requires.anyTraits = [m[1]]; requires.area = true; requires.areaTypes = [m[2]]; table("a cantrip"); }
+    else if ((m = new RegExp(`^a Spell of ${ORDINAL} level or lower that has the ([a-z]+) trait or is associated with dreams$`).exec(rest))) { requires.maxRank = Number(m[1]); table(`it has the ${m[2]} trait or is associated with dreams`); }
+    else if ((m = /^(?:a |an )?([a-z]+) or ([a-z]+) spell that deals persistent damage$/.exec(rest))) { requires.damaging = true; requires.damageTypesAny = [m[1], m[2]]; table("it deals persistent damage"); }
+    else if ((m = new RegExp(`^a ${ORDINAL}-rank ([a-z]+) spell$`).exec(rest))) { requires.rank = Number(m[1]); table(`${/^[aeiou]/.test(m[2]) ? "an" : "a"} ${m[2]} spell`); }
+    else if ((m = /^(?:a |an )?Spell (?:that deals|dealing) ([a-z]+) damage$/i.exec(rest))) { requires.damaging = true; requires.damageType = m[1]; }
+    else if ((m = /^(?:a |an )?Spell that (?:doesn't|does not) have the ([a-z]+) trait$/i.exec(rest))) requires.notTraits = [m[1]];
+    else if (/^(?:a |an )?Spell on yourself or a single ally that grants a bonus to AC$/i.test(rest)) { requires.singleTarget = true; table("it's on you or a single ally and grants a bonus to AC"); }
+    // (A spell by its name, unlinked: "a revealing light spell", "banishment", "an animate dead spell".)
+    else if ((m = /^(?:an? )(?!(?:wall|an?)\b)([a-z][a-z']*(?: [a-z][a-z']*)+) spell$|^(?!an?\b)([a-z][a-z']+)$/.exec(rest))) {
+        const name = String(m[1] ?? m[2]).replace(/\b[a-z]/g, letter => letter.toUpperCase());
+        // (A pre-remaster name the item still uses: the remastered spell too — "animate dead" is Summon Undead.)
+        requires.spells = [name, ...(REMASTERED[name] ?? [])];
+    }
     else if (/^(?:a )?Spell$/i.test(rest)) {}
     else return null;
     return requires;
+}
+
+/** A listed benefit added to the last summon-benefit rider: [] (claimed), or null when there's none. */
+function benefit(context, entry) {
+    const rider = context.riders.findLast(candidate => candidate.type === "summon-benefit");
+    if (!rider) return null;
+    rider.choices.push(entry);
+    return [];
 }
 
 // The effect's sentences after the lead: [pattern, (match, context) => rider(s) | { requires } | { arm }].
@@ -116,6 +147,68 @@ const FORMS = [
         m => ({ type: "turn-save-area", center: "caster", radius: Number(m[1]), rounds: 10, who: null, statistic: null, outcomes: {}, light: { bright: Number(m[1]) } })],
     [/^(Enemies|Creatures) that start their turn in this bright light must attempt a (Fortitude|Reflex|Will) save against your spell DC\.$/,
         (m, context) => { const rider = context.riders.findLast(entry => entry.type === "turn-save-area"); if (!rider) return null; rider.who = m[1] === "Enemies" ? "enemies" : "all"; rider.statistic = m[2].toLowerCase(); return []; }],
+    // PF2e's grimoires and instruments (2026-10-19):
+    // Instructions for Lasting Agony (Excruciating Spell), Grudge Journal (Air Grievance).
+    [/^you warp and twist the energy of the spell to cause intense pain\.$/, () => []],
+    [new RegExp(String.raw`^If the target fails its saving throw against the spell, it becomes ${COND} by the pain\.$`), m => ({ type: "conditions", degrees: { failure: [cond(m[1], m[2], m[3])], criticalFailure: [cond(m[1], m[2], m[3])] } })],
+    [/^You inscribe the name or description of a creature you can see that has wronged you in some way\.$/, () => ({ type: "table", text: "the creature you inscribed" })],
+    [new RegExp(String.raw`^the creature also becomes ${COND} unless it critically succeeds its saving throw\.$`),
+        m => ({ type: "conditions", degrees: { success: [cond(m[1], m[2], m[3])], failure: [cond(m[1], m[2], m[3])], criticalFailure: [cond(m[1], m[2], m[3])] } })],
+    // Chapbook of Terrors (Horrify): the persistent damage on each creature the spell frightened.
+    [/^creatures (frightened|stupefied|sickened) by the spell also take @Damage\[(\d+d\d+)\[persistent,([a-z]+)\](?:\|[^\]]*)?\] damage as they dwell on your terrifying tale\.$/,
+        m => ({ type: "persistent", whenCondition: m[1], degrees: [], formula: m[2], damageType: m[3] })],
+    // Book of Lingering Blaze (Overheat Spell), Kindled Tome.
+    [/^you superheat the flames, allowing the spell to ignore up to (\d+) resistance to ([a-z]+) of creatures affected by the spell\.$/, m => ({ type: "ignore-resistance", types: [m[2]], value: Number(m[1]) })],
+    // Mocker's Swazzle (Mocking Spell), Courtier's Pillow Book, What Doors We Open (Cast Out): a penalty to the target's save against the spell, before it rolls.
+    [/^You direct a quick bit of insulting mockery at a creature who can understand you that's within earshot\.$/, () => ({ type: "table", text: "the creature you mocked, who can understand you and is within earshot" })],
+    [new RegExp(String.raw`^that creature takes a [–-](\d+) (item|circumstance|status) penalty to any saving throw against the spell and, regardless of the result of the saving throw, becomes ${COND} until the start of your next turn\.$`),
+        m => { const off = cond(m[3], m[4], m[5], { until: "caster-turn-start" }); return [{ type: "save-penalty", value: -Number(m[1]), penaltyType: m[2] },
+            { type: "conditions", degrees: { criticalSuccess: [off], success: [{ ...off }], failure: [{ ...off }], criticalFailure: [{ ...off }] } }]; }],
+    [/^you can state that secret or foible before Casting the Spell to give the target a [–-](\d+) (item|circumstance|status) penalty to their saving throw against the spell\.$/,
+        m => ({ type: "save-penalty", value: -Number(m[1]), penaltyType: m[2] })],
+    [/^The inscription then disappears from the grimoire\.$/, () => ({ type: "table", text: "the inscription then disappears from the book" })],
+    [/^it counts as the extra cost of adding an object that is anathema to the creature and gives the creature a [–-](\d+) (item|circumstance|status) penalty to its save\.$/,
+        m => [{ type: "save-penalty", value: -Number(m[1]), penaltyType: m[2] }, { type: "table", text: "it counts as the anathema object of the spell's extra cost" }]],
+    [/^If the targeted creature is an? ([a-z]+), increase this to a [–-](\d+) (?:item |circumstance |status )?penalty\.$/,
+        (m, context) => { const rider = context.riders.findLast(entry => entry.type === "save-penalty"); if (!rider) return null; rider.vsTraits = { ...(rider.vsTraits ?? {}), [m[1]]: -Number(m[2]) }; return []; }],
+    // Hollow Robes (Unseen Magic).
+    [/^that spell gains the ([a-z]+) trait\.$/, m => ({ type: "trait", trait: m[1] })],
+    // Folding Drums.
+    [/^You play a pounding rhythm on the drum\.$/, () => []],
+    [/^increase the area of the (burst|cone|emanation|line) by (\d+) feet\.$/, m => ({ type: "area", grow: [{ types: [m[1]], add: Number(m[2]) }] })],
+    // Dreamstone.
+    [/^the spell slot is not expended\.$/, () => ({ type: "slot-refund" })],
+    // Corrosive Engravings: the condition while the spell's persistent damage lasts.
+    [new RegExp(String.raw`^any creature who takes persistent damage from the spell is also ${COND} until the persistent damage ends\.$`),
+        m => ({ type: "persistent-condition", list: [cond(m[1], m[2], m[3])] })],
+    [/^Using an action to retch can reduce the sickened value as normal, but it can't reduce the sickened value below (\d+) until the persistent damage ends\.$/,
+        (m, context) => { const rider = context.riders.findLast(entry => entry.type === "persistent-condition"); if (!rider) return null; rider.floor = Number(m[1]); return []; }],
+    // Draxie's Recipe Book: a note on each creature the spell reaches unless it critically succeeds.
+    [/^all creatures within the spell's area who don't critically succeed at their save are covered with a spicy red powder\.$/,
+        () => ({ type: "degree-note", degrees: ["success", "failure", "criticalFailure"], label: "Spicy red powder", text: [] })],
+    [/^(Any attempt to grab or grapple a creature affected in this way, or to swallow such a creature whole, gains a \+1 circumstance bonus to the attempt, or a \+2 circumstance bonus if the attempt is made using a jaws or similar mouth-based attack, due to the target's extra deliciousness and savory smell|An affected creature can remove the powder by thoroughly cleaning themselves \(a process that typically takes about 10 minutes\) or by completely immersing themselves in water)\.$/,
+        (m, context) => { const rider = context.riders.findLast(entry => entry.type === "degree-note"); if (!rider) return null; rider.text.push(`${m[1]}.`); return []; }],
+    [/^This ability can also be used to properly season up to 100 pounds of prepared food within the area of the revealing light spell instantaneously\.$/, m => ({ type: "table", text: m[0] })],
+    // Warding Tablets (Purging Spell): the counteract on the target; a failure costs the spell its effects (the GM's).
+    [/^you use the tablets' power to infuse the warding with additional magic and attempt to remove a harmful effect\.$/, () => []],
+    [/^Attempt to counteract a harmful spell effect of your choice on the target\.$/, () => ({ type: "counteract-effect", traits: [], rankBonus: 0 })],
+    [/^This isn't without risks, however\.$/, () => []],
+    [/^If your attempt fails to remove the harmful effect, the warding energy is consumed by the unyielding malediction, and you lose the original spell's normal effects\.$/,
+        m => ({ type: "note", text: "If the counteract fails, the spell's own effects are lost: remove its Effect from the target." })],
+    // Arclord's Codex (Third Eye Rejuvenation): prepared spells already cast today, regained.
+    [/^the magical energies reinvigorate your spellcasting\.$/, () => []],
+    [new RegExp(`^You regain access to (two|one|\\d+) spells? of ${ORDINAL} rank or lower or (one|two|\\d+) spells? of ${ORDINAL} rank or higher that you've prepared and already cast today\\.$`),
+        m => { const count = word => ({ one: 1, two: 2 })[word] ?? Number(word); return { type: "restore-prepared", either: [{ count: count(m[1]), maxRank: Number(m[2]) }, { count: count(m[3]), minRank: Number(m[4]) }] }; }],
+    // Tyrant's Writs: one benefit of the list for the summoned undead, the caster's pick.
+    [/^you can choose one of the following additional benefits to grant the summoned undead\.$/, () => ({ type: "summon-benefit", choices: [] })],
+    [/^(Bloody) The undead gains fast healing equal to its level\.$/, (m, context) => benefit(context, { key: "bloody", label: m[1], text: m[0], rules: [{ key: "FastHealing", value: "level" }] })],
+    [/^(Explosive) When it reaches 0 Hit Points, the undead explodes, dealing @Damage\[(\d+d\d+)\[([a-z]+)\]\] damage to adjacent creatures, with a basic (Fortitude|Reflex|Will) save using the [a-z ]+ spell's DC\.$/,
+        (m, context) => benefit(context, { key: "explosive", label: m[1], text: m[0].replace(/@Damage\[(\d+d\d+)\[([a-z]+)\]\]/, "$1 $2"), explode: { formula: m[2], damageType: m[3], statistic: m[4].toLowerCase() } })],
+    [/^As normal, since the final sacrifice spell doesn't reduce the target to 0 Hit Points, it doesn't cause this explosion\.$/, () => []],
+    [/^(Necrotic Speed) The undead gains a \+(\d+)-foot status bonus to all its Speeds\.$/,
+        (m, context) => benefit(context, { key: "speed", label: m[1], text: m[0], rules: [{ key: "FlatModifier", selector: "all-speeds", type: "status", value: Number(m[2]) }] })],
+    [/^(Rotten) Any living creature who starts its turn adjacent to the undead who isn't at full Hit Points takes @Damage\[(\d+d\d+)\[([a-z]+)\]\] damage\.?$/,
+        (m, context) => benefit(context, { key: "rotten", label: m[1], text: m[0].replace(/@Damage\[(\d+d\d+)\[([a-z]+)\]\]/, "$1 $2"), aura: { formula: m[2], damageType: m[3], adjacent: true, livingOnly: true, notFull: true } })],
     // Communion Mat: the familiar's Sustain is the player's.
     [/^your patron notices that you're putting their power to good use and strengthens your familiar with a surge of magic\.$/, () => []],
     [/^Your familiar Sustains one of your spells\.$/, m => ({ type: "note", wandRule: true, text: m[0] })]
@@ -193,10 +286,13 @@ function readOfficialItemSpellshape(source) {
         const body = part;
         const header = [null, name];
         const potion = /(?:^|\. )When you drink an? [^,]+?\s?, if your next action is to Cast a Spell, (.+?)(?= Craft Requirements |$)/.exec(body);
-        if (!traits.includes("spellshape") && !potion) continue;
+        // (A grimoire's or instrument's activation without the spellshape trait whose effect is the next cast's: Draxie's Recipe Book, Folding Drums.)
+        const nextCast = /\bEffect (?:[^.]+\. )?If (?:your next action|the next action you use|the next activity you take this round) is to (?:Cast|cast|target that creature with) /.test(body);
+        if (!traits.includes("spellshape") && !potion && !nextCast) continue;
         const frequency = /Frequency (once per [a-z0-9 ]+?)(?= Effect| Requirements)/.exec(body)?.[1] ?? null;
         const precondition = /Requirements (.+?) Effect /.exec(body)?.[1] ?? null;
-        let effect = (potion ? `If your next action is to Cast a Spell, ${potion[1]}` : /Effect (.+)$/.exec(body)?.[1])?.trim();
+        // (The item's Craft Requirements after the last activation aren't its effect.)
+        let effect = (potion ? `If your next action is to Cast a Spell, ${potion[1]}` : /Effect (.+)$/.exec(body)?.[1])?.replace(/ Craft Requirements .*$/, "").trim();
         if (!effect) return null;
         // (A trailing link to PF2e's Effect — "@UUID[…]{Effect: Juubun's One Thousand Poems}" — is the Effect the text's benefit uses.)
         const effectLink = new RegExp(String.raw`\s*@UUID\[(Compendium\.pf2e\.equipment-effects\.Item\.[A-Za-z0-9]+)\]\{(Effect: [^}]+)\}\s*$`).exec(effect);
@@ -215,7 +311,7 @@ function readOfficialItemSpellshape(source) {
         }
         let at = 0;
         // (Sentences before the lead: the activation's own effect — Hundred-Moth Caress's damage.)
-        const LEAD = /^If (?:your next action|the next action you use) is to (?:Strike with the [a-z ]+ or to )?(?:Cast|cast) (.+?), (.+)$/;
+        const LEAD = /^If (?:your next action|the next action you use|the next activity you take this round) is to (?:Strike with the [a-z ]+ or to )?(?:Cast|cast|target that creature with) (.+?), (.+)$/;
         while (at < sentences.length && !LEAD.test(unlinkAction(sentences[at]))) {
             const read = readSentence(sentences[at], context);
             if (!read) return null;
@@ -234,6 +330,8 @@ function readOfficialItemSpellshape(source) {
             if (requires) rest = pieces.slice(cut).join(", ");
         }
         if (!requires) { unreadSentence = sentences[at]; return null; }
+        // ("to target that creature with a prepared spell …": one target, the creature the activation named.)
+        if (/^If your next action is to target that creature with /.test(unlinkAction(sentences[at]))) { requires.singleTarget = true; requires.table = [...(requires.table ?? []), "it targets the creature you inscribed"]; }
         context.requires = requires;
         if (strikeToo) {
             const extra = /^that Strike or spell deals additional ([a-z]+) damage equal to the damage you took\.$/.exec(rest);

@@ -165,6 +165,9 @@ export class ImmediateRuntime {
             const mode=kind==='heal'?(undead?'damage':actor.traits.has('construct')||actor.system.attributes.negativeHealing?'unaffected':'healing'):'damage';
             targets.push({...snapshot,tokenUuid:token.uuid,id:randomID(),revision:0,mode,excluded:mode==='unaffected',attack:null,save:null,applicationStatus:'pending'});
         }
+        // (An item's hit standing in for the attack roll — Disintegration Bolt through castFromItem's attackDegree: the save is next.)
+        const itemHit=sourceCard?.getFlag(MODULE_ID,'castFromItem');
+        if(kind==='disintegrate'&&['success','criticalSuccess'].includes(itemHit?.attackDegree))for(const target of targets)target.attack={degree:itemHit.attackDegree,total:`${itemHit.itemName}'s hit`,natural:null,modifier:null,source:'item',userId:user.id};
         if(data.object){
             if(kind!=='disintegrate'||targets.length||!user.isGM||!data.object.confirmed||!Number.isFinite(data.object.ac))throw Error('The GM must explicitly confirm the object and its AC.');
             const object=await fromUuid(data.object.uuid);

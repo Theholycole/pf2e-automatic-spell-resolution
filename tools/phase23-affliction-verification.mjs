@@ -42452,6 +42452,245 @@ export const cases = {
             `Cheliax batch 13: ${JSON.stringify(out)}`);
         return {cheliax13: out};
     },
+    // castFromItem's options for the item module's ammunition (2026-10-16): saveFirst (Silencing Shot: Silence on the creatures failing a DC 25 Will save; none cast when
+    // all succeed) and attackDegree (Disintegration Bolt: Disintegrate's card starts with the bolt's critical hit as its attack, its save next).
+    async castFromItemOptions(ctx) {
+        const wait = ms => new Promise(r => setTimeout(r, ms));
+        const NSX = 'pf2e-automatic-resolution';
+        const out = {};
+        try {
+            const shooter = await Actor.create({name: 'PFTEST P23 Affliction ammo shooter', type: 'character', flags: {[NSX]: {phase23AfflictionFixture: true}}, system: {details: {level: {value: 12}}}});
+            ctx.saved.actors.push(shooter.id); await ctx.persist();
+            const token = await ctx.token(shooter);
+            const quiet = await ctx.actor('ammo quiet', {save: -30}), loud = await ctx.actor('ammo loud', {save: 60});
+            const tq = await ctx.token(quiet), tl = await ctx.token(loud); await wait(500);
+            const index = await game.packs.get('pf2e.spells-srd').getIndex();
+            const uuidOf = name => `Compendium.pf2e.spells-srd.Item.${index.find(i => i.name === name)._id}`;
+            const item = name => ({name, uuid: `Actor.${shooter.id}.Item.ammo${name.replace(/\W/g, '').slice(0, 8)}`});
+            const silenced = await ctx.api.castFromItem({actor: shooter, token, spell: uuidOf('Silence'), rank: 4, dc: 25, targets: [tq, tl], item: item('Silencing Shot'), saveFirst: {statistic: 'will', dc: 25}}); await wait(1200);
+            out.silencing = {saves: (silenced.saves ?? []).map(s => [s.name?.replace('PFTEST P23 Affliction ', ''), s.degree]), message: !!silenced.message,
+                targets: (silenced.message?.getFlag(NSX, 'castFromItem')?.targets ?? []).map(uuid => fromUuidSync(uuid)?.name?.replace('PFTEST P23 Affliction ', ''))};
+            const resisted = await ctx.api.castFromItem({actor: shooter, token, spell: uuidOf('Silence'), rank: 4, dc: 25, targets: [tl], item: item('Silencing Shot'), saveFirst: {statistic: 'will', dc: 25}}); await wait(600);
+            out.resisted = {resisted: resisted.resisted === true, message: resisted.message ?? null};
+            const bolt = await ctx.api.castFromItem({actor: shooter, token, spell: uuidOf('Disintegrate'), rank: 6, dc: 34, targets: [tq], item: item('Disintegration Bolt'), attackDegree: 'criticalSuccess'}); await wait(1500);
+            const spell = await fromUuid(bolt.spellUuid);
+            const started = await ctx.api.immediate.start(spell, {castRank: 6, targets: [tq], confirmed: true, sourceMessageId: bolt.message.id}); await wait(1200);
+            const state = game.messages.get(started.cardId)?.getFlag(NSX, 'immediateCast');
+            const t = state?.targets?.[0];
+            out.bolt = {attack: t?.attack?.degree ?? null, label: t?.attack?.total ?? null, dc: state?.dc ?? null};
+            // Spellstrike Ammunition: any spell attack spell — Hydraulic Push's card records the ammunition's critical hit as each target's result.
+            const push = await ctx.api.castFromItem({actor: shooter, token, spell: uuidOf('Hydraulic Push'), rank: 1, dc: 30, targets: [tq], item: item('Spellstrike Ammunition'), attackDegree: 'criticalSuccess'}); await wait(1500);
+            const pushSpell = await fromUuid(push.spellUuid);
+            const r = await ctx.api.saves.start(pushSpell, {plan: await ctx.api.compile(pushSpell), sourceActor: shooter, targets: [tq], castRank: 1, skipConfirmation: true, sourceMessageId: push.message.id});
+            const pushTarget = ctx.state(r.card ?? r).targets[0];
+            out.ammo = {statistic: ctx.state(r.card ?? r).saveStatistic, degree: pushTarget.degree, hit: pushTarget.itemHit ?? null};
+        } catch (error) { out.error = error.stack ?? error.message; }
+        const s = out.silencing ?? {}, b = out.bolt ?? {};
+        out.listed = [...(ctx.api.castFromItemOptions ?? [])];
+        assert(!out.error && JSON.stringify(out.listed) === '["attackDegree","saveFirst"]' && JSON.stringify(s.saves) === '[["ammo quiet",1],["ammo loud",3]]' && s.message && JSON.stringify(s.targets) === '["ammo quiet"]'
+            && out.resisted?.resisted && out.resisted.message === null && b.attack === 'criticalSuccess' && /Disintegration Bolt's hit/.test(b.label ?? '') && b.dc === 34
+            && out.ammo?.statistic === 'spell-attack' && out.ammo.degree === 'criticalSuccess' && /Spellstrike Ammunition's hit/.test(out.ammo.hit ?? ''), `castFromItem options: ${JSON.stringify(out)}`);
+        return {castFromItemOptions: out};
+    },
+    // Mythic casts (the user, 2026-10-19): an NPC with the mythic trait and 1 Mythic Point casts Freedom — 0 left and the chat line; a second cast is refused
+    // before PF2e casts (no cast message); a spell without the trait costs nothing.
+    async mythicCost(ctx) {
+        const wait = ms => new Promise(r => setTimeout(r, ms));
+        const out = {};
+        try {
+            const fixture = await ctx.setup('Freedom');
+            await fixture.caster.update({'system.traits.value': [...new Set([...(fixture.caster.system.traits.value ?? []), 'mythic'])]}); await wait(300);
+            await fixture.caster.update({'system.resources.mythicPoints.value': 1}); await wait(300);
+            const casts = () => game.messages.contents.filter(m => m.flags?.pf2e?.context?.type === 'spell-cast' && m.actor === fixture.caster).length;
+            const before = casts();
+            out.start = {points: fixture.caster.system.resources?.mythicPoints?.value ?? null, max: fixture.caster.system.resources?.mythicPoints?.max ?? null};
+            await fixture.spell.spellcasting.cast(fixture.spell, {consume: false}); await wait(1500);
+            out.first = {casts: casts() - before, points: fixture.caster.system.resources.mythicPoints.value,
+                line: game.messages.contents.slice(-4).some(m => /spends 1 Mythic Point to cast/.test(m.content ?? ''))};
+            let refused = null;
+            try { await fixture.spell.spellcasting.cast(fixture.spell, {consume: false}); } catch (error) { refused = error.message; }
+            await wait(800);
+            out.second = {refused, casts: casts() - before};
+        } catch (error) { out.error = error.stack ?? error.message; }
+        const f = out.first ?? {}, s = out.second ?? {};
+        assert(!out.error && out.start?.points === 1 && f.casts === 1 && f.points === 0 && f.line && /no Mythic Point to spend/.test(s.refused ?? '') && s.casts === 1, `Mythic cost: ${JSON.stringify(out)}`);
+        return {mythicCost: out};
+    },
+    // PF2e's grimoires and instruments, batch 1 (the user: build all 16, 2026-10-19): Instructions for Lasting Agony (Void Warp: a failed save, Sickened 1),
+    // Chapbook of Terrors (Fear: the frightened foe also takes 1d6 persistent mental), Mocker's Swazzle (Fear: −1 item to the save, Off-Guard whatever the result),
+    // Book of Lingering Blaze (Fireball through fire resistance 10), Corrosive Engravings (Acid Grip: Sickened 2 while the persistent acid lasts), Draxie's
+    // Recipe Book (Revealing Light: the spicy powder on the foe), Dreamstone (Sleep: the slot kept).
+    async grimoireShapes1(ctx) {
+        const wait = ms => new Promise(r => setTimeout(r, ms));
+        const NSX = 'pf2e-automatic-resolution';
+        const g = canvas.grid.size;
+        const out = {};
+        const place = async (actor, x, y) => (await canvas.scene.createEmbeddedDocuments('Token', [{...actor.prototypeToken.toObject(), actorId: actor.id, actorLink: true, x, y}]))[0];
+        const from = async (pack, name) => { const d = (await game.packs.get(pack).getDocuments()).find(x => x.name === name); if (!d) throw new Error(`${name} isn't in ${pack}`); const o = d.toObject(); delete o._id; return o; };
+        const until = async find => { for (let i = 0; i < 50; i++) { const found = find(); if (found) return found; await wait(300); } return null; };
+        const caster = await Actor.create({name: 'PFTEST P23 Affliction gs1 caster', type: 'character', flags: {[NSX]: {phase23AfflictionFixture: true}}});
+        await caster.update({'system.details.alliance': 'party', 'system.details.level.value': 13});
+        await caster.createEmbeddedDocuments('Item', [{name: 'PFTEST hit points', type: 'effect', system: {rules: [{key: 'FlatModifier', selector: 'hp', value: 300}]}}]);
+        const [entry] = await caster.createEmbeddedDocuments('Item', [{name: 'arcane prepared', type: 'spellcastingEntry', system: {tradition: {value: 'arcane'}, prepared: {value: 'prepared'}, spelldc: {dc: 30, value: 20}, proficiency: {value: 2}}}]);
+        const spellNames = ['Void Warp', 'Fear', 'Fireball', 'Acid Grip', 'Revealing Light', 'Sleep'];
+        const itemNames = ['Instructions for Lasting Agony', 'Chapbook of Terrors', "Mocker's Swazzle", 'Book of Lingering Blaze', 'Corrosive Engravings', "Draxie's Recipe Book", 'Dreamstone'];
+        const made = await caster.createEmbeddedDocuments('Item', [...await Promise.all(spellNames.map(name => from('pf2e.spells-srd', name).then(o => { o.system.location = {value: entry.id}; return o; }))),
+            ...await Promise.all(itemNames.map(name => from('pf2e.equipment-srd', name)))]);
+        const spell = name => made.find(i => i.type === 'spell' && i.name === name);
+        const item = name => made.find(i => i.name === name);
+        // (Sleep prepared in a 1st-rank slot, for Dreamstone.)
+        await entry.update({'system.slots.slot1': {max: 2, value: 2, prepared: [{id: spell('Sleep').id, expended: false}, {id: null, expended: false}]}});
+        await place(caster, 30 * g, 20 * g);
+        await caster.update({'system.attributes.hp.value': caster.hitPoints.max});
+        const foe = await ctx.actor('gs1 foe', {level: 1, save: -30});
+        await foe.update({'system.details.alliance': 'opposition', 'system.attributes.resistances': [{type: 'fire', value: 10}], 'system.traits.value': ['humanoid']});
+        const tFoe = await place(foe, 31 * g, 20 * g);
+        const target = token => token.object?.setTarget(true, {releaseOthers: true});
+        const arm = async (name, preset = {activation: 0}) => { const m = await item(name).toMessage(null, {create: false}); const data = m.toObject(); foundry.utils.setProperty(data, `flags.${NSX}.itemShapeChoice`, preset);
+            await ChatMessage.create(data); await until(() => caster.itemTypes.effect.find(e => e.flags?.[NSX]?.pendingSpellshape?.featUuid === item(name).uuid)); await wait(300); };
+        const castNow = async (name, rank, consume = false) => { const mark = game.messages.size; const sp = spell(name); await sp.spellcasting.cast(sp, {rank, consume, ...(consume ? {slotId: 0} : {})});
+            return until(() => { const c = game.messages.contents.slice(mark).find(m => m.flags?.pf2e?.casting && m.actor === caster); return c?.getFlag(NSX, 'shaping') ? c : null; }); };
+        const open = async (cast, name, rank) => { const sp = spell(name); const r = await ctx.api.saves.start(sp, {plan: await ctx.api.compile(sp), sourceActor: caster, targets: [tFoe.object ?? tFoe], castRank: rank, skipConfirmation: true, sourceMessageId: cast.id}); return r.card ?? r; };
+        const settle = async (card, degree) => { const t = ctx.state(card).targets[0]; const roll = await ctx.api.saves.rollSave(card, t.id, {skipDialog: true}); await ctx.api.saves.correctTarget(card, t.id, {action: 'degree', degree});
+            await ctx.api.saves.finalize(card); await wait(2500); return {roll, state: ctx.state(card)}; };
+        const reset = async () => { await foe.update({'system.attributes.hp.value': 500}); for (const e of [...foe.itemTypes.effect, ...foe.itemTypes.condition]) if (foe.items.get(e.id)) await e.delete().catch(() => null); await wait(400); };
+        try {
+            target(tFoe);
+            await arm('Instructions for Lasting Agony');
+            let cast = await castNow('Void Warp', 7);
+            await settle(await open(cast, 'Void Warp', 7), 'failure');
+            out.agony = {shaped: cast?.getFlag(NSX, 'shaping')?.shapes?.map(s => s.name) ?? null, sickened: foe.getCondition('sickened')?.value ?? 0};
+            await reset();
+            await arm('Chapbook of Terrors');
+            cast = await castNow('Fear', 1);
+            await settle(await open(cast, 'Fear', 1), 'failure');
+            const mental = foe.itemTypes.condition.find(c => c.slug === 'persistent-damage' && c.system.persistent?.damageType === 'mental');
+            out.horrify = {frightened: foe.getCondition('frightened')?.value ?? 0, persistent: mental ? `${mental.system.persistent.formula} mental` : null};
+            await reset();
+            await arm("Mocker's Swazzle");
+            cast = await castNow('Fear', 1);
+            const mockCard = await open(cast, 'Fear', 1);
+            const mocked = await settle(mockCard, 'success');
+            out.mocking = {penalty: Number(mocked.roll?.options?.totalModifier ?? NaN) - Number(foe.saves.will.mod), offGuard: foe.hasCondition('off-guard')};
+            await reset();
+            await arm('Book of Lingering Blaze');
+            cast = await castNow('Fireball', 3);
+            const before = foe.hitPoints.value;
+            const blaze = await settle(await open(cast, 'Fireball', 3), 'failure');
+            out.blaze = {lost: before - foe.hitPoints.value, rolled: blaze.state.damage?.total ?? blaze.state.targets[0].damageTotal ?? null};
+            await reset();
+            await arm('Corrosive Engravings');
+            cast = await castNow('Acid Grip', 2);
+            await settle(await open(cast, 'Acid Grip', 2), 'failure');
+            out.corrosive = {persistent: foe.itemTypes.condition.some(c => c.slug === 'persistent-damage' && c.system.persistent?.damageType === 'acid'), sickened: foe.getCondition('sickened')?.value ?? 0,
+                effect: foe.itemTypes.effect.some(e => /Corrosive Engravings: sickened 2 while the persistent acid/.test(e.name))};
+            for (const c of foe.itemTypes.condition.filter(c => c.slug === 'persistent-damage')) await c.delete(); await wait(1500);
+            out.corrosive.afterPersistent = {sickened: foe.getCondition('sickened')?.value ?? 0, effect: foe.itemTypes.effect.some(e => /Corrosive Engravings/.test(e.name))};
+            await reset();
+            await arm("Draxie's Recipe Book");
+            cast = await castNow('Revealing Light', 2);
+            await settle(await open(cast, 'Revealing Light', 2), 'failure');
+            out.powder = foe.itemTypes.effect.some(e => /Spicy red powder/.test(e.name));
+            await reset();
+            await arm('Dreamstone');
+            cast = await castNow('Sleep', 1, true); await wait(1500);
+            out.dream = {shaped: cast?.getFlag(NSX, 'shaping')?.shapes?.map(s => s.name) ?? null, expended: caster.items.get(entry.id).system.slots.slot1.prepared[0].expended};
+        } catch (error) { out.error = error.stack ?? error.message; }
+        const c = out.corrosive ?? {};
+        assert(!out.error && out.agony?.shaped?.includes('Instructions for Lasting Agony') && out.agony.sickened === 1 && out.horrify?.frightened >= 1 && /^1d6 mental$/.test(out.horrify.persistent ?? '')
+            && out.mocking?.offGuard && out.mocking.penalty === -1 && out.blaze?.lost > 0 && out.blaze.lost === out.blaze.rolled && c.persistent && c.sickened === 2 && c.effect && c.afterPersistent?.sickened === 0 && !c.afterPersistent.effect
+            && out.powder && out.dream?.expended === false, `Grimoire shapes 1: ${JSON.stringify(out)}`);
+        return {grimoireShapes1: out};
+    },
+    // PF2e's grimoires and instruments, batch 2 (2026-10-19): Courtier's Pillow Book (Fear: −1 circumstance to the save), What Doors We Open's Cast Out (Banishment
+    // against a demon: −3), Folding Drums (Courageous Anthem: 90 feet), Grudge Journal (Ill Omen failed: Drained 2), Kindled Tome (Fireball through fire
+    // resistance 10), Arclord's Codex (a 10th-rank arcane spell: two expended 4th-rank slots back), Tyrant's Writs (Summon Undead: Necrotic Speed on the undead).
+    async grimoireShapes2(ctx) {
+        const wait = ms => new Promise(r => setTimeout(r, ms));
+        const NSX = 'pf2e-automatic-resolution';
+        const g = canvas.grid.size;
+        const out = {};
+        const place = async (actor, x, y) => (await canvas.scene.createEmbeddedDocuments('Token', [{...actor.prototypeToken.toObject(), actorId: actor.id, actorLink: true, x, y}]))[0];
+        const from = async (pack, name) => { const d = (await game.packs.get(pack).getDocuments()).find(x => x.name === name); if (!d) throw new Error(`${name} isn't in ${pack}`); const o = d.toObject(); delete o._id; return o; };
+        const until = async find => { for (let i = 0; i < 50; i++) { const found = find(); if (found) return found; await wait(300); } return null; };
+        const caster = await Actor.create({name: 'PFTEST P23 Affliction gs2 caster', type: 'character', flags: {[NSX]: {phase23AfflictionFixture: true}}});
+        await caster.update({'system.details.alliance': 'party', 'system.details.level.value': 19});
+        await caster.createEmbeddedDocuments('Item', [{name: 'PFTEST hit points', type: 'effect', system: {rules: [{key: 'FlatModifier', selector: 'hp', value: 300}]}}]);
+        const [entry] = await caster.createEmbeddedDocuments('Item', [{name: 'arcane prepared', type: 'spellcastingEntry', system: {tradition: {value: 'arcane'}, prepared: {value: 'prepared'}, spelldc: {dc: 30, value: 20}, proficiency: {value: 2}}}]);
+        const index = await game.packs.get('pf2e.spells-srd').getIndex({fields: ['system.level.value', 'system.traits.traditions', 'system.traits.value']});
+        const tenth = index.find(e => e.system?.level?.value === 10 && (e.system?.traits?.traditions ?? []).includes('arcane') && !(e.system?.traits?.value ?? []).includes('cantrip'))?.name;
+        const spellNames = ['Fear', 'Banishment', 'Courageous Anthem', 'Ill Omen', 'Fireball', 'Summon Undead', 'Mystic Armor', tenth].filter(Boolean);
+        const itemNames = ["Courtier's Pillow Book", 'What Doors We Open', 'Folding Drums', 'Grudge Journal', 'Kindled Tome', "Arclord's Codex", "Tyrant's Writs"];
+        const made = await caster.createEmbeddedDocuments('Item', [...await Promise.all(spellNames.map(name => from('pf2e.spells-srd', name).then(o => { o.system.location = {value: entry.id}; return o; }))),
+            ...await Promise.all(itemNames.map(name => from('pf2e.equipment-srd', name)))]);
+        const spell = name => made.find(i => i.type === 'spell' && i.name === name);
+        const item = name => made.find(i => i.name === name);
+        await place(caster, 30 * g, 24 * g);
+        await caster.update({'system.attributes.hp.value': caster.hitPoints.max});
+        const foe = await ctx.actor('gs2 foe', {level: 1, save: -30});
+        await foe.update({'system.details.alliance': 'opposition', 'system.attributes.resistances': [{type: 'fire', value: 10}], 'system.traits.value': ['humanoid']});
+        const tFoe = await place(foe, 31 * g, 24 * g);
+        const demon = await ctx.actor('gs2 demon', {level: 1, save: 5, traits: ['demon', 'fiend']});
+        await demon.update({'system.details.alliance': 'opposition'});
+        const tDemon = await place(demon, 31 * g, 25 * g);
+        const arm = async (name, preset = {activation: 0}) => { const m = await item(name).toMessage(null, {create: false}); const data = m.toObject(); foundry.utils.setProperty(data, `flags.${NSX}.itemShapeChoice`, preset);
+            await ChatMessage.create(data); await until(() => caster.itemTypes.effect.find(e => e.flags?.[NSX]?.pendingSpellshape?.featUuid === item(name).uuid)); await wait(300); };
+        const castNow = async (name, rank) => { const mark = game.messages.size; const sp = spell(name); await sp.spellcasting.cast(sp, {rank, consume: false});
+            return until(() => { const c = game.messages.contents.slice(mark).find(m => m.flags?.pf2e?.casting && m.actor === caster); return c?.getFlag(NSX, 'shaping') ? c : null; }); };
+        const open = async (cast, name, rank, token) => { const sp = spell(name); const r = await ctx.api.saves.start(sp, {plan: await ctx.api.compile(sp), sourceActor: caster, targets: [token.object ?? token], castRank: rank, skipConfirmation: true, sourceMessageId: cast.id}); return r.card ?? r; };
+        const settle = async (card, degree) => { const t = ctx.state(card).targets[0]; const roll = await ctx.api.saves.rollSave(card, t.id, {skipDialog: true}); await ctx.api.saves.correctTarget(card, t.id, {action: 'degree', degree});
+            await ctx.api.saves.finalize(card); await wait(2500); return roll; };
+        const reset = async () => { for (const a of [foe, demon]) { await a.update({'system.attributes.hp.value': 500}); for (const e of [...a.itemTypes.effect, ...a.itemTypes.condition]) if (a.items.get(e.id)) await e.delete().catch(() => null); } await wait(400); };
+        try {
+            tFoe.object?.setTarget(true, {releaseOthers: true});
+            await arm("Courtier's Pillow Book");
+            let cast = await castNow('Fear', 1);
+            let roll = await settle(await open(cast, 'Fear', 1, tFoe), 'success');
+            out.courtier = Number(roll?.options?.totalModifier ?? NaN) - Number(foe.saves.will.mod);
+            await reset();
+            tDemon.object?.setTarget(true, {releaseOthers: true});
+            await arm('What Doors We Open', {activation: 0});
+            cast = await castNow('Banishment', 5);
+            roll = await settle(await open(cast, 'Banishment', 5, tDemon), 'success');
+            out.castOut = Number(roll?.options?.totalModifier ?? NaN) - Number(demon.saves.will.mod);
+            await reset();
+            await arm('Folding Drums');
+            cast = await castNow('Courageous Anthem', 10);
+            out.drums = cast?.getFlag(NSX, 'shaping')?.area ?? null;
+            tFoe.object?.setTarget(true, {releaseOthers: true});
+            await arm('Grudge Journal');
+            cast = await castNow('Ill Omen', 1);
+            await settle(await open(cast, 'Ill Omen', 1, tFoe), 'failure');
+            out.grudge = foe.getCondition('drained')?.value ?? 0;
+            await reset();
+            await arm('Kindled Tome');
+            cast = await castNow('Fireball', 3);
+            const before = foe.hitPoints.value;
+            const card = await open(cast, 'Fireball', 3, tFoe);
+            await settle(card, 'failure');
+            out.kindled = {lost: before - foe.hitPoints.value, shaped: cast?.getFlag(NSX, 'shaping')?.shapes?.map(s => s.name) ?? null};
+            await reset();
+            // Arclord's Codex: two 4th-rank prepared Fireballs already cast, regained.
+            await entry.update({'system.slots.slot4': {max: 2, value: 2, prepared: [{id: spell('Fireball').id, expended: true}, {id: spell('Fireball').id, expended: true}]}});
+            const slots = [`${entry.id}|slot4|0`, `${entry.id}|slot4|1`];
+            await arm("Arclord's Codex", {activation: 0, choice: slots});
+            cast = tenth ? await castNow(tenth, 10) : null; await wait(1500);
+            const after = caster.items.get(entry.id).system.slots.slot4.prepared;
+            out.codex = {tenth, shaped: cast?.getFlag(NSX, 'shaping')?.shapes?.map(s => s.name) ?? null, regained: after.filter(p => !p.expended).length};
+            // Tyrant's Writs: Summon Undead's undead with Necrotic Speed.
+            let undead = null;
+            for (const pack of game.packs.filter(p => p.documentName === 'Actor')) { const idx = await pack.getIndex({fields: ['system.details.level.value', 'system.traits.value', 'system.traits.rarity']});
+                const hit = idx.find(e => e.type === 'npc' && e.system?.traits?.value?.includes('undead') && e.system?.details?.level?.value === -1 && (e.system?.traits?.rarity ?? 'common') === 'common'); if (hit) { undead = hit.uuid; break; } }
+            await arm("Tyrant's Writs", {activation: 0, choice: 'speed'});
+            cast = await castNow('Summon Undead', 1);
+            const summoned = await ctx.api.execute(spell('Summon Undead'), {sourceActor: caster, plan: await ctx.api.compile(spell('Summon Undead')), castRank: 1, skipConfirmation: true, sourceMessageId: cast.id, targets: [], summonUuid: undead}); await wait(2500);
+            const summonedActor = summoned?.actorUuid ? await fromUuid(summoned.actorUuid) : null;
+            out.writs = {summoned: !!summonedActor, speed: summonedActor?.itemTypes.effect.some(e => /Tyrant's Writs: Necrotic Speed/.test(e.name)) ?? false};
+        } catch (error) { out.error = error.stack ?? error.message; }
+        assert(!out.error && out.courtier === -1 && out.castOut === -3 && out.drums?.to === 90 && out.grudge === 2 && out.kindled?.lost > 0 && out.kindled.shaped?.includes('Kindled Tome')
+            && (out.codex?.tenth ? out.codex.regained === 2 : true) && out.writs?.summoned && out.writs.speed, `Grimoire shapes 2: ${JSON.stringify(out)}`);
+        return {grimoireShapes2: out};
+    },
     async cleanup(ctx) {
         // (The deleted records kept for the last case's reads: gone with it.)
         globalThis.__pftestRemovedRecords?.clear();
