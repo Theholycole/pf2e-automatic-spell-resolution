@@ -63,6 +63,8 @@ export function readItemRequirements(text) {
     else if ((m = /^(?:a |an )?([a-z]+) or ([a-z]+) spell that deals persistent damage$/.exec(rest))) { requires.damaging = true; requires.damageTypesAny = [m[1], m[2]]; table("it deals persistent damage"); }
     else if ((m = new RegExp(`^a ${ORDINAL}-rank ([a-z]+) spell$`).exec(rest))) { requires.rank = Number(m[1]); table(`${/^[aeiou]/.test(m[2]) ? "an" : "a"} ${m[2]} spell`); }
     else if ((m = /^(?:a |an )?Spell (?:that deals|dealing) ([a-z]+) damage$/i.exec(rest))) { requires.damaging = true; requires.damageType = m[1]; }
+    // (Tome of Scintillating Sleet's "a cold spell that deals damage", 2026-10-29.)
+    else if ((m = /^(?:a |an )?([a-z]+) spell that deals damage$/i.exec(rest))) { requires.anyTraits = [m[1].toLowerCase()]; requires.damaging = true; }
     else if ((m = /^(?:a |an )?Spell that (?:doesn't|does not) have the ([a-z]+) trait$/i.exec(rest))) requires.notTraits = [m[1]];
     else if (/^(?:a |an )?Spell on yourself or a single ally that grants a bonus to AC$/i.test(rest)) { requires.singleTarget = true; table("it's on you or a single ally and grants a bonus to AC"); }
     // (A spell by its name, unlinked: "a revealing light spell", "banishment", "an animate dead spell".)
@@ -158,6 +160,15 @@ const FORMS = [
     // PF2e's grimoires and instruments (2026-10-19):
     // Instructions for Lasting Agony (Excruciating Spell), Grudge Journal (Air Grievance).
     [/^you warp and twist the energy of the spell to cause intense pain\.$/, () => []],
+    // Tome of Scintillating Sleet (2026-10-29, the item module's ask): Dazzled for the rounds on each creature the spell damages; a critically
+    // failed save against it, or a critical spell attack, Blinded for its round and Dazzled the rounds after it instead.
+    [new RegExp(String.raw`^all creatures damaged by the spell are also ${COND} for (\d+) rounds? by light refracting and reflecting within and around the spell's chilling effects\.$`),
+        m => ({ type: "conditions", when: "damaged", list: [cond(m[1], m[2], m[3], { rounds: Number(m[4]) })] })],
+    [new RegExp(String.raw`^If an affected creature critically failed its save against the required spell, or if you critically succeeded on your spell attack roll against the creature, it's instead ${COND} for (\d+) rounds? and then dazzled for (\d+) rounds\.$`),
+        (m, context) => { const before = context.riders.findLast(rider => rider.type === "conditions" && rider.when === "damaged" && rider.list?.[0]?.slug === "dazzled"); if (!before) return null;
+            const blind = cond(m[1], m[2], m[3], { rounds: Number(m[4]) }), dazzled = { ...before.list[0], rounds: Number(m[4]) + Number(m[5]) };
+            // (A save spell's degree is its target's, an attack spell's the caster's: each row only for its kind.)
+            return [{ type: "conditions", saveOnly: true, degrees: { criticalFailure: [blind, dazzled] } }, { type: "conditions", attackOnly: true, degrees: { criticalSuccess: [{ ...blind }, { ...dazzled }] } }]; }],
     // In the Shadows of Toil (2026-10-29, the item module's ask): Fatigued for a time on a failed save.
     [/^you infuse the magic with sensations of endless toil\.$/, () => []],
     [new RegExp(String.raw`^If the target fails its saving throw against the spell, it becomes ${COND} for (\d+) minutes? by the sense of exhaustion imbued in the magic\.$`),

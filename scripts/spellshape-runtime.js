@@ -1531,6 +1531,8 @@ export async function applyShapeRiders(state, target, actor, token, { DamageRoll
             continue;
         }
         if (rider.type === "conditions") {
+            // (A row for a save spell's target or an attack spell's hit only, Tome of Scintillating Sleet's critical rows — 2026-10-29.)
+            if ((rider.attackOnly && !attack) || (rider.saveOnly && attack)) continue;
             // ("If the creature is immune to emotion, fear, or mental effects, it is immune to this frightened condition.")
             const immunities = (actor.attributes?.immunities ?? actor.system?.attributes?.immunities ?? []).map(entry => entry.type ?? entry);
             if ((rider.unlessImmune ?? []).some(type => immunities.includes(type))) continue;

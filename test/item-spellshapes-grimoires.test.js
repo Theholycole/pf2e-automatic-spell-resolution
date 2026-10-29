@@ -77,3 +77,19 @@ test('In the Shadows of Toil: Fatigued 1 minute on a failed save; its necromancy
     assert.deepEqual([shape.requires.prepared, shape.requires.saves.length, shape.requires.anyTraits, shape.requires.table.length], [true, 3, undefined, 2]);
     assert.deepEqual(['failure', 'criticalFailure'].map(degree => shape.riders[0].degrees[degree].map(entry => [entry.slug, entry.rounds])), [[['fatigued', 10]], [['fatigued', 10]]]);
 });
+
+// (2026-10-29, the item module's ask) Tome of Scintillating Sleet: Dazzled 3 rounds on each creature its cold damage spell damages; a critically
+// failed save (a save spell) or a critical spell attack (an attack spell), Blinded 1 round and Dazzled the 3 after it.
+test('Tome of Scintillating Sleet: Dazzled for the damaged, Blinded then Dazzled on a critical, each row for its kind of spell', async t => {
+    const packs = `${process.env.HOME}/.local/share/FoundryVTT/Data/systems/pf2e/packs/equipment`;
+    if (!existsSync(packs)) return t.skip('PF2e isn\'t installed here');
+    const {readDocuments} = await import('../../pf2e-automatic-ability-resolution/tools/leveldb.mjs');
+    const [shape] = readItemSpellshape(readDocuments(packs).find(entry => entry.name === 'Tome of Scintillating Sleet')).activations;
+    assert.deepEqual([shape.requires.anyTraits, shape.requires.damaging], [['cold'], true]);
+    const [damaged, save, attack] = shape.riders;
+    assert.deepEqual([damaged.when, damaged.list.map(entry => [entry.slug, entry.rounds])], ['damaged', [['dazzled', 3]]]);
+    assert.deepEqual([save.saveOnly, save.degrees.criticalFailure.map(entry => [entry.slug, entry.rounds])], [true, [['blinded', 1], ['dazzled', 4]]]);
+    assert.deepEqual([attack.attackOnly, attack.degrees.criticalSuccess.map(entry => [entry.slug, entry.rounds])], [true, [['blinded', 1], ['dazzled', 4]]]);
+    assert.equal(unmetRequirement(shape.requires, facts({traits: ['cold'], damageTypes: ['cold']})), null);
+    assert.notEqual(unmetRequirement(shape.requires, facts({traits: ['fire']})), null);
+});
