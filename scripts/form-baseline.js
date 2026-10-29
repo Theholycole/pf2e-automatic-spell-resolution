@@ -16,3 +16,14 @@ export const FORM_EFFECT_HASHES = {
     "tk3go5Cl6Qt130Dk": "7b2ff587e23b2c81d353a3441b2ccf073510f0c6e6f926b97f530fc69e9d2db6",
     "ydsLEGjY89Akc4oZ": "2dd65dbbad6af39f13f63deb2919adcf654116977babdaa36f4fc3372e329f50"
 };
+
+// PF2e 8.6.1's, where its native form Effect changed (2026-10-29): Animal Form (Crocodile) only its jaws' icon; Dragon Form its burrow, climb
+// and swim speeds moved from BaseSpeed rules into the choice and the BattleForm (PF2e 8.5.1's errata: a battle form removes unmentioned
+// speeds) and its rank-8 status bonus to fly Speed now its own. Every other form Effect is the same as 8.5.0's.
+export const FORM_EFFECT_HASHES_8_6 = {
+    "0B3noZtrBfeHC7ye": "b37601ff7549264abc47fe2077d3f89ff1ff19586bc9f085354ae452e7b71ce3",
+    "1pC1qjvCuAKzjYo8": "2df72779ec17c4f5b14bafe52c341406c043d153f9876707caacf54bb154ac10"
+};
+
+// Whether a native form Effect's digest is one verified: 8.5.0's, or 8.6.1's where that one changed.
+export const formDigestVerified = (id, digest) => digest === FORM_EFFECT_HASHES[id] || digest === FORM_EFFECT_HASHES_8_6[id];

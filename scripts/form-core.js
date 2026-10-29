@@ -37,7 +37,9 @@ export function prepareFormSource(template, { kind, rank, choice, flying = false
         source.flags.pf2e.rulesSelections.dragonForm = selected;
         // hasHands is a BattleForm field, not an override statistic.
         battle.hasHands = true;
-        if (rank >= 8) rules.push({ key: 'FlatModifier', selector: 'fly-speed', type: 'status', value: 20, label: 'Dragon Form (rank 8)', battleForm: true });
+        // (PF2e 8.6's Effect gives its rank-8 status bonus to fly Speed itself: ours only where it doesn't.)
+        const ownFly = rules.some(r => r.key === 'FlatModifier' && r.selector === 'fly-speed' && r.type === 'status');
+        if (rank >= 8 && !ownFly) rules.push({ key: 'FlatModifier', selector: 'fly-speed', type: 'status', value: 20, label: 'Dragon Form (rank 8)', battleForm: true });
         const grant = rules.find(r => r.key === 'GrantItem' && r.flag === 'dragonBreath');
         grant.onDeleteActions = { granter: 'cascade', grantee: 'detach' };
     }

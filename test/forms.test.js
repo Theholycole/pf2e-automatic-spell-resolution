@@ -43,3 +43,17 @@ test('with libWrapper on, the form guards go through it once, as WRAPPER or MIXE
   const entry=new Entry();entry.actor={items:[],flags:{pf2e:{battleForm:true}}};assert.equal(entry.cast(),'native');
  }finally{delete globalThis.libWrapper;globalThis.game=oldGame;globalThis.CONFIG=oldConfig;}
 });
+import {existsSync} from 'node:fs';
+import {formDigestVerified} from '../scripts/form-baseline.js';
+// (2026-10-29) PF2e 8.6's installed form Effects, when there: each one's digest verified (8.5.0's or 8.6.1's), and Dragon Form's own rank-8
+// fly bonus not doubled by ours.
+test('the installed PF2e form Effects are verified, Dragon Form keeping one rank-8 fly bonus',async t=>{
+ const packs=`${process.env.HOME}/.local/share/FoundryVTT/Data/systems/pf2e/packs/spell-effects`;
+ if(!existsSync(packs))return t.skip('PF2e isn\'t installed here');
+ const {readDocuments}=await import('../../pf2e-automatic-ability-resolution/tools/leveldb.mjs');
+ const effects=new Map(readDocuments(packs).map(d=>[d._id,d]));
+ for(const id of Object.keys(FORM_EFFECT_HASHES)){const d=effects.get(id);assert.ok(d,id);assert.ok(formDigestVerified(id,createHash('sha256').update(canonicalFormMechanics(d)).digest('hex')),d.name);}
+ const dragon=effects.get('1pC1qjvCuAKzjYo8'),source=prepareFormSource(dragon,{kind:'dragon-form',rank:8,choice:'despair'});
+ assert.equal(source.system.rules.filter(r=>r.key==='FlatModifier'&&r.selector==='fly-speed'&&r.type==='status').length,1);
+ assert.equal(source.system.rules.find(r=>r.key==='ChoiceSet').selection.saveType,'will');
+});

@@ -1,7 +1,7 @@
 import { waitForNativeFormUpdate } from './form-native-guards.js';
 import { MODULE_ID } from './effect-runtime.js';
 import { clone, randomID, escapeHTML as esc, confirmAction, tempHPSourceId } from './runtime-utils.js';
-import { FORM_EFFECT_HASHES } from './form-baseline.js';
+import { formDigestVerified } from './form-baseline.js';
 import { canonicalFormMechanics, FORM_PROFILES, validateFormRank, formSize, prepareFormSource, rechargeReady } from './form-core.js';
 const state = journal => journal.getFlag(MODULE_ID, 'ongoingCast');
 const formFlag = item => item?.getFlag(MODULE_ID, 'formCastId');
@@ -14,7 +14,9 @@ export class FormRuntime {
         const plain = s => String(s).replace(/<hr\s*\/?\s*>/gi, '<hr>').replace(/@UUID\[[^\]]+\]/g, '@UUID').replace(/\s+/g, ' ').trim();
         if (!native || plain(native.system.description.value) !== plain(item.system.description.value)) throw Error('This spell differs from the verified form profile.');
         for (const key of ['traits','duration','target','range','heightening']) if (JSON.stringify(native.system[key]) !== JSON.stringify(item.system[key])) throw Error(`Changed form ${key} requires review.`);
-        if (game.system.version !== '8.5.0') throw Error('Form integration requires verification for this PF2e version.');
+        // (PF2e 8.5 and 8.6: verified live on 8.5.0 and 8.6.1, 2026-10-29 — the native spell's text and fields above and its Effect's digest
+        // below still refuse anything changed from those.)
+        if (!/^8\.[56]\./.test(String(game.system.version))) throw Error('Form integration requires verification for this PF2e version.');
         return kind;
     }
     async choices(kind) {
@@ -73,7 +75,7 @@ export class FormRuntime {
         const template = await fromUuid(`Compendium.pf2e.spell-effects.Item.${kind==='animal-form'?data.choice:FORM_PROFILES[kind].effectId}`);
         const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonicalFormMechanics(template.toObject())));
         const digest=Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
-        if(digest!==FORM_EFFECT_HASHES[template.id])throw Error('Native form Effect mechanics changed from the verified baseline. Review before applying.');
+        if(!formDigestVerified(template.id,digest))throw Error('Native form Effect mechanics changed from the verified baseline. Review before applying.');
         const source=prepareFormSource(template.toObject(),{kind,rank:data.rank,choice:data.choice,flying:data.choice==='flying'});
         const castId=randomID();
         source.flags ??= {}; source.flags[MODULE_ID]={formCastId:castId,runtime:{castInstanceId:castId,sourceActorUuid:actor.uuid,sourceItemUuid:item.uuid,sourceItemName:item.name}};
