@@ -213,10 +213,15 @@ export function bindItemCastButtons(message, html) {
 // of the attack. If the spell requires a spell attack roll, the result of your attack roll with the weapon determines the degree of success of the
 // spell, and if the spell requires a saving throw, the DC is 30."
 const RESERVOIR = { maxRank: 3, maxActions: 2, dc: 30 };
-/** The actor's Spell Reservoir runes, with the weapon each is etched onto. */
+/** The actor's Spell Reservoir runes, with the weapon each is etched onto: PF2e's property rune (spellStoring, "Spell Reservoir" — as a weapon
+ *  is etched with it, Animate Dreamer's too: 2026-10-29), or the rune's item attached to it. */
 function reservoirs(actor) {
     const found = [];
-    for (const weapon of actor?.itemTypes?.weapon ?? []) for (const sub of weapon.subitems ?? []) if (sub.slug === "spell-reservoir") found.push({ rune: sub, weapon });
+    for (const weapon of actor?.itemTypes?.weapon ?? []) {
+        const sub = (weapon.subitems ?? []).find(item => item.slug === "spell-reservoir");
+        if (sub) found.push({ rune: sub, weapon });
+        else if ((weapon.system?.runes?.property ?? []).includes("spellStoring")) found.push({ rune: weapon, weapon });
+    }
     return found;
 }
 const stored = (actor, weapon) => actor.getFlag(MODULE_ID, `spellReservoir.${weapon.id}`) ?? null;
@@ -250,7 +255,44 @@ export async function reservoirOnStrike(message) {
         content: `<section class="pf2e-auto-runtime-card"><p><strong>Spell Reservoir</strong> (Channeled Release): ${escapeHTML(data.name)} at the creature hit — saves against DC ${RESERVOIR.dc}${data.attack ? `; the Strike's ${escapeHTML(context.outcome)} is the spell attack's result` : ""}.</p><button type="button" data-pf2e-auto-reservoir="release">Release ${escapeHTML(data.name)}</button></section>` });
 }
 
-/** The reservoir's buttons: store the cast spell (it's lost now), or release the stored spell at the Strike's target. */
+/** The weapon's stored spell cast at the targets from an entry of the rune's own: Channeled Release's DC 30 (its Strike's degree the spell attack's,
+ *  a GM line), or an item's own numbers — Animate Dreamer's Unleash Spell, a spell attack +25 and DC 33 (api.itemCasts.reservoirCast, 2026-10-29). */
+async function releaseStored(actor, weapon, { targets = [], degree = null, dc = null, attack = null } = {}) {
+    const held = stored(actor, weapon);
+    if (!held) throw new Error(`${weapon.name} holds no spell.`);
+    const tokens = (targets ?? []).map(target => target?.object ?? target?.document?.object ?? target).filter(Boolean);
+    if (tokens.length && typeof canvas?.tokens?.setTargets === "function") canvas.tokens.setTargets(tokens.map(token => token.id ?? token.document?.id).filter(Boolean));
+    else tokens[0]?.setTarget?.(true, { releaseOthers: true });
+    const numbers = dc != null ? { dc: Number(dc), attack: attack != null ? Number(attack) : Number(dc) - 10 } : { dc: RESERVOIR.dc, attack: RESERVOIR.dc - 10 };
+    const rune = reservoirs(actor).find(found => found.weapon.id === weapon.id)?.rune ?? weapon;
+    const entry = await itemEntry(actor, rune, (held.source.system?.traits?.traditions ?? [])[0] ?? "arcane", numbers, held.rank);
+    const source = foundry.utils.deepClone(held.source);
+    delete source._id;
+    source.system.location = { value: entry.id, heightenedLevel: held.rank };
+    const [spell] = await actor.createEmbeddedDocuments("Item", [source]);
+    await actor.unsetFlag(MODULE_ID, `spellReservoir.${weapon.id}`);
+    await entry.cast(spell, { rank: held.rank, consume: false });
+    if (held.attack && degree) try { await ChatMessage.create({ whisper: gmIds(), content: `<p class="pf2e-auto-gm-reminder"><strong>Spell Reservoir</strong> (GM): ${escapeHTML(held.name)}'s spell attack takes the Strike's result — ${escapeHTML(degree)}.</p>` }); } catch (_) {}
+    return { released: held.name, spellId: spell.id, dc: numbers.dc, attack: numbers.attack };
+}
+/** An item's own release of its stored spell (Animate Dreamer's Unleash Spell): at the targets, with its numbers. */
+export async function reservoirCast({ actor, weapon, targets = [], dc = null, attack = null } = {}) {
+    if (!actor || !weapon) throw new Error("reservoirCast: the actor and the weapon are needed.");
+    return releaseStored(actor, weapon, { targets, dc, attack });
+}
+/** What a weapon holds, for other modules: { name, rank } or null. */
+export const reservoirHeld = ({ actor, weapon }) => { const held = actor && weapon ? stored(actor, weapon) : null; return held ? { name: held.name, rank: held.rank } : null; };
+
+/** Safe Release: a Spell Reservoir weapon's stored spell expended harmlessly (api.itemCasts.reservoirExpend). → { expended: name } */
+export async function reservoirExpend({ actor, weapon }) {
+    const held = actor && weapon ? stored(actor, weapon) : null;
+    if (!held) throw new Error(`${weapon?.name ?? "The weapon"} holds no spell.`);
+    await actor.unsetFlag(MODULE_ID, `spellReservoir.${weapon.id}`);
+    await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), content: `<p><strong>Spell Reservoir</strong> (Safe Release): ${escapeHTML(held.name)} is expended harmlessly; ${escapeHTML(weapon.name)} can hold a new spell.</p>` });
+    return { expended: held.name };
+}
+
+/** The reservoir's buttons: store the cast spell (it's lost now), release the stored spell at the Strike's target, or expend it (Safe Release). */
 export async function runReservoirButton(message, action) {
     const data = message.flags?.[MODULE_ID]?.reservoir;
     const actor = data ? await fromUuid(data.actorUuid).catch(() => null) : null;
@@ -262,24 +304,15 @@ export async function runReservoirButton(message, action) {
         await actor.setFlag(MODULE_ID, `spellReservoir.${weapon.id}`, { ...data.spell, attack });
         const cast = game.messages.get(data.castId);
         if (cast) await loseSpell(cast, `cast into ${weapon.name}'s Spell Reservoir`);
+        // (The card now says so, with the rune's Safe Release: "Harmlessly expend the stored spell" — 2026-10-29, the item module's ask.)
+        await message.update({ content: `<section class="pf2e-auto-runtime-card"><p><strong>Spell Reservoir</strong>: ${escapeHTML(data.spell.name)} (rank ${data.spell.rank}) is stored in ${escapeHTML(weapon.name)}; a hit with it can release it (Channeled Release).</p><button type="button" data-pf2e-auto-reservoir="expend">Safe Release: empty ${escapeHTML(weapon.name)}</button></section>` }).catch(() => null);
         return { stored: data.spell.name };
     }
+    // (Safe Release: the stored spell expended harmlessly, the weapon free for another.)
+    if (action === "expend") return reservoirExpend({ actor, weapon });
     if (action === "release") {
-        const held = stored(actor, weapon);
-        if (!held) throw new Error(`${weapon.name} holds no spell.`);
         const target = data.targetUuid ? await fromUuid(data.targetUuid).catch(() => null) : null;
-        target?.object?.setTarget(true, { releaseOthers: true });
-        // (The rune's spells: an entry of its own, DC 30.)
-        const rune = reservoirs(actor).find(found => found.weapon.id === weapon.id)?.rune ?? weapon;
-        const entry = await itemEntry(actor, rune, (held.source.system?.traits?.traditions ?? [])[0] ?? "arcane", { dc: RESERVOIR.dc, attack: RESERVOIR.dc - 10 }, held.rank);
-        const source = foundry.utils.deepClone(held.source);
-        delete source._id;
-        source.system.location = { value: entry.id, heightenedLevel: held.rank };
-        const [spell] = await actor.createEmbeddedDocuments("Item", [source]);
-        await actor.unsetFlag(MODULE_ID, `spellReservoir.${weapon.id}`);
-        await entry.cast(spell, { rank: held.rank, consume: false });
-        if (held.attack) try { await ChatMessage.create({ whisper: gmIds(), content: `<p class="pf2e-auto-gm-reminder"><strong>Spell Reservoir</strong> (GM): ${escapeHTML(held.name)}'s spell attack takes the Strike's result — ${escapeHTML(data.degree)}.</p>` }); } catch (_) {}
-        return { released: held.name, spellId: spell.id };
+        return releaseStored(actor, weapon, { targets: target ? [target] : [], degree: data.degree });
     }
     throw new Error(`Unknown Spell Reservoir action ${action}.`);
 }

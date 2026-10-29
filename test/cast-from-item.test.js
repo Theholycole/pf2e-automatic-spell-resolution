@@ -43,3 +43,9 @@ test("an item's damage type reaches the spell's damage stated in words, its own 
     assert.deepEqual([out.system.traits.value, out.system.damage[0].type], [['concentrate', 'fire', 'manipulate'], 'fire']);
     assert.equal(out.system.description.value, '<p>A section … deals 2d6 fire damage to any creature passing through it. Its weakness to fire stays.</p><hr /><p>Heightened (+2) … the fire damage dealt to creatures crossing a destroyed section increases by 1d6.</p>');
 });
+
+import {itemClaims} from '../src/compiler/item-claims.js';
+test('the Spell Reservoir rune claimed: its storing, Channeled Release and Safe Release this module\'s (2026-10-29)', () => {
+    assert.ok(itemClaims({type: 'equipment', name: 'Spell Reservoir', system: {slug: 'spell-reservoir', traits: {value: ['magical']}, description: {value: ''}}}).includes('spell-reservoir'));
+    assert.ok(!itemClaims({type: 'equipment', name: 'Spell Bastion', system: {slug: 'spell-bastion', traits: {value: []}, description: {value: ''}}}).includes('spell-reservoir'));
+});

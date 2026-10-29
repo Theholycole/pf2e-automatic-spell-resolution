@@ -45,7 +45,7 @@ import { bloodMagicOnCast, runBloodMagic, spiteStrikes, spiteTurnStart, bindBloo
 import { castingRulesOnCast, runCastingRule, bindCastingRuleButtons, spellLikeCast } from "./casting-rules-runtime.js";
 import { armItemSpellshape, runItemShapeCard, bindItemShapeButtons, itemShapeTurnStart, itemShapeWatchMessage, starChartOnCast, catalystSporesOnDamage, shieldShardsBlock } from "./item-spellshape-runtime.js";
 import { readItemSpellshape } from "../src/compiler/item-spellshape.js";
-import { offerItemCasts, castFromItem, itemCastOnCard, bindItemCastButtons, reservoirOnCast, reservoirOnStrike, runReservoirButton, castSpellForItem, sweepItemCastTemps } from "./item-cast-runtime.js";
+import { offerItemCasts, castFromItem, itemCastOnCard, bindItemCastButtons, reservoirOnCast, reservoirOnStrike, runReservoirButton, reservoirExpend, reservoirCast, reservoirHeld, castSpellForItem, sweepItemCastTemps } from "./item-cast-runtime.js";
 import { readItemCasts } from "../src/compiler/item-casts.js";
 import { claims as itemClaimed, itemClaims } from "../src/compiler/item-claims.js";
 import { spellTriggerItemsOnCast, runTriggerItem, bindTriggerItemButtons } from "./spell-trigger-items-runtime.js";
@@ -1563,7 +1563,7 @@ Hooks.once("init", () => {
             castFromItemOptions: Object.freeze(["attackDegree", "saveFirst", "withoutTraits", "addTraits", "area", "damageType", "actions", "growth"]),
             // (The items this module acts on — scrolls, wands, staves, spellhearts, catalysts, and what its item readers read — for other modules to leave alone.)
             claims: source => itemClaimed(source?.toObject?.() ?? source), claimsWhy: source => itemClaims(source?.toObject?.() ?? source),
-            itemCasts: { read: source => readItemCasts(source), offer: item => offerItemCasts(item), cast: (item, index, options) => castFromItem(item, index, options), reservoir: (message, action) => runReservoirButton(message, action) },
+            itemCasts: { read: source => readItemCasts(source), offer: item => offerItemCasts(item), cast: (item, index, options) => castFromItem(item, index, options), reservoir: (message, action) => runReservoirButton(message, action), reservoirExpend: options => reservoirExpend(options), reservoirCast: options => reservoirCast(options), reservoirHeld: options => reservoirHeld(options) },
             itemShapes: { read: source => readItemSpellshape(source), arm: (message, item) => armItemSpellshape(message, item), run: (message, button) => runItemShapeCard(message, button), turnStart: combat => itemShapeTurnStart(combat), watch: message => itemShapeWatchMessage(message) },
             bloodMagic: { onCast: message => bloodMagicOnCast(message), run: (message, choice, options) => runBloodMagic(message, choice, options), spite: (uuid, token) => spiteStrikes(uuid, token) },
             // Authoring aid: which route a spell takes and what blocks it.

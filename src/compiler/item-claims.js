@@ -13,11 +13,14 @@ import { readFocusFeature } from "../../scripts/plus-focus-runtime.js";
 import { readCounteractFeature } from "../../scripts/plus-counteract-runtime.js";
 import { readCastAfter } from "../../scripts/plus-cast-riders-runtime.js";
 
+// (The Spell Reservoir rune — its storing, Channeled Release and Safe Release this module's own, scripts/item-cast-runtime.js — 2026-10-29, the
+// item module's ask: by its slug.)
+const readReservoirRune = source => (source?.system?.slug === "spell-reservoir" ? { kind: "spell-reservoir" } : null);
 const ITEM_TYPES = new Set(["consumable", "equipment", "weapon", "armor", "shield", "treasure", "backpack", "kit", "ammo"]);
 const KINDS = ["scroll", "wand", "staff", "spellheart", "catalyst"];
 const READERS = [["wand", readWand], ["item-spellshape", readItemSpellshape], ["item-casts", readItemCasts], ["text-rules", readTextRules], ["passive-cast", readPassiveCastRider],
     ["focus-regain", readFocusRegain], ["cast-reaction", readCastReaction], ["action-cast", readActionCast], ["essence-activation", readEssenceActivation], ["energy-rune", readEnergyRune],
-    ["backfire-ammo", readBackfireAmmo], ["focus-feature", readFocusFeature], ["counteract-feature", readCounteractFeature], ["cast-after", readCastAfter]];
+    ["backfire-ammo", readBackfireAmmo], ["focus-feature", readFocusFeature], ["counteract-feature", readCounteractFeature], ["cast-after", readCastAfter], ["spell-reservoir", readReservoirRune]];
 
 /** Why this module acts on an item (its source): the kinds and readers that claim it, or [] — never for feats, actions or spells (they aren't items). */
 export function itemClaims(source) {
