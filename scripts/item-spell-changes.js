@@ -45,11 +45,17 @@ export function changedSpellSource(source, changes) {
         // (An inline roll's damage types: "@Damage[(2d6+4)[fire]]", "@Damage[2d6[persistent,fire]]" — its category kept.)
         // (Healing isn't damage: Heal's healing rolls keep theirs.)
         const retypeText = text => String(text ?? "").replace(/@Damage\[((?:[^\[\]]|\[[^\[\]]*\])*)\]/g, (all, body) => `@Damage[${body.replace(/\[((?:persistent|precision|splash),)?([a-z]+)\]/g, (whole, category, was) => (["healing", "temphp"].includes(was) ? whole : `[${category ?? ""}${type}]`))}]`);
+        // (And its damage stated in words, "deals 2d6 cold damage" and its Heightened "the cold damage … increases" — Everburning Coal's Wall
+        // of Ice made fire: only the spell's own damage types, before they're changed, so "resistance to fire" in other words stays.)
+        const own = [...new Set([out.system.damage, ...overlays.map(overlay => overlay?.system?.damage)].flatMap(damage => Object.values(damage ?? {}))
+            .filter(partial => partial?.type && !["healing", "temphp"].includes(partial.type) && !(partial.kinds ?? []).includes?.("healing")).map(partial => partial.type))].filter(was => was !== type);
+        const stated = own.length ? new RegExp(`\\b(${own.join("|")}) damage\\b`, "g") : null;
+        const retypeWords = text => (stated ? String(text ?? "").replace(stated, `${type} damage`) : String(text ?? ""));
         retypeDamage(out.system.damage);
-        if (out.system.description) out.system.description.value = retypeText(out.system.description.value);
+        if (out.system.description) out.system.description.value = retypeWords(retypeText(out.system.description.value));
         for (const overlay of overlays) {
             if (overlay?.system?.damage) retypeDamage(overlay.system.damage);
-            if (overlay?.system?.description?.value) overlay.system.description.value = retypeText(overlay.system.description.value);
+            if (overlay?.system?.description?.value) overlay.system.description.value = retypeWords(retypeText(overlay.system.description.value));
         }
         out.flags ??= {};
         out.flags[MODULE_ID] = { ...(out.flags[MODULE_ID] ?? {}), castDamageType: type };

@@ -310,8 +310,11 @@ export function spellDurationSeconds(source) {
  *   `area` ({type, value}: Fan of Soothing Winds' Heal in a 30-foot cone, its 3-action variant's area too) and `damageType` (every damage instance of the
  *   spell that type: Soulcutter's spirit Weapon Storm, its held weapon's dice too) — itemSpellChanges, scripts/item-spell-changes.js.
  * - `actions` (1–3): the actions of a spell with action variants the item casts (Fan of Soothing Winds' 3-action Heal), so its route doesn't ask.
+ * - `growth` ({feet}): how much each step of a growing aura adds (Shining Wayfinder's Bless, 5 feet for each single concentrate action, once a
+ *   turn — Bless's own Sustain button, its step the item's).
  */
-export async function castSpellForItem({ actor, token = null, spell, rank = null, dc = null, counteract = null, targets = null, item = null, attackDegree = null, saveFirst = null, withoutTraits = null, addTraits = null, area = null, damageType = null, actions = null } = {}) {
+export async function castSpellForItem({ actor, token = null, spell, rank = null, dc = null, counteract = null, targets = null, item = null, attackDegree = null, saveFirst = null, withoutTraits = null, addTraits = null, area = null, damageType = null, actions = null, growth = null } = {}) {
+    if (growth != null && !(Number(growth.feet) > 0 && Number(growth.feet) < 15)) throw new Error("castFromItem: growth is {feet: 5 or 10}.");
     if (actions != null && ![1, 2, 3].includes(Number(actions))) throw new Error("castFromItem: actions is 1, 2 or 3.");
     if (!actor) throw new Error("castFromItem: the actor is missing.");
     if (attackDegree != null && !["success", "criticalSuccess"].includes(attackDegree)) throw new Error("castFromItem: attackDegree is \"success\" or \"criticalSuccess\" (a hit).");
@@ -375,7 +378,7 @@ export async function castSpellForItem({ actor, token = null, spell, rank = null
     for (let i = 0; i < 40 && !message; i++) { message = game.messages.contents.slice(mark).find(entry => isCastMessage(entry) && entry.actor === actor); if (!message) await new Promise(resolve => setTimeout(resolve, 250)); }
     if (message) {
         await message.setFlag(MODULE_ID, "castFromItem", { itemName: holder.name, itemUuid, rank: castRank, dc: numbers.dc, counteract: counteract != null ? Number(counteract) : null,
-            targets: tokens.map(entry => entry.document?.uuid ?? entry.uuid).filter(Boolean), ...(attackDegree ? { attackDegree } : {}), ...(actions != null ? { actions: Number(actions) } : {}) }).catch(() => null);
+            targets: tokens.map(entry => entry.document?.uuid ?? entry.uuid).filter(Boolean), ...(attackDegree ? { attackDegree } : {}), ...(actions != null ? { actions: Number(actions) } : {}), ...(growth != null ? { growth: { feet: Number(growth.feet) } } : {}) }).catch(() => null);
         // (The card's header names the item.)
         await message.update({ flavor: `<strong>${escapeHTML(holder.name)}</strong>${message.flavor ? ` ${message.flavor}` : ""}` }).catch(() => null);
     }

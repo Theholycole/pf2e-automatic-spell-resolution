@@ -35,3 +35,11 @@ test("an item's changes to its spell: traits less and more, its area with its va
     assert.equal(out.system.overlays.x.system.description.value, '@Damage[3d6[spirit]]');
     assert.equal(out.flags['pf2e-automatic-resolution'].castDamageType, 'spirit');
 });
+
+test("an item's damage type reaches the spell's damage stated in words, its own types only (Everburning Coal's Wall of Ice in fire)", () => {
+    const wall = {name: 'Wall of Ice', type: 'spell', system: {traits: {value: ['cold', 'concentrate', 'manipulate', 'water']}, damage: {0: {formula: '2d6', type: 'cold', kinds: ['damage']}},
+        description: {value: '<p>A section … deals 2d6 cold damage to any creature passing through it. Its weakness to fire stays.</p><hr /><p>Heightened (+2) … the cold damage dealt to creatures crossing a destroyed section increases by 1d6.</p>'}}};
+    const out = changedSpellSource(wall, itemSpellChanges({withoutTraits: ['cold', 'water'], addTraits: ['fire'], damageType: 'fire'}));
+    assert.deepEqual([out.system.traits.value, out.system.damage[0].type], [['concentrate', 'manipulate', 'fire'], 'fire']);
+    assert.equal(out.system.description.value, '<p>A section … deals 2d6 fire damage to any creature passing through it. Its weakness to fire stays.</p><hr /><p>Heightened (+2) … the fire damage dealt to creatures crossing a destroyed section increases by 1d6.</p>');
+});

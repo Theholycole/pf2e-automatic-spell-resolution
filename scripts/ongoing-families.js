@@ -130,6 +130,10 @@ export class OngoingFamilies {
                 const template = await fromUuid("Compendium.pf2e.spell-effects.Item.Gqy7K6FnbLtwGpud");
                 const source = template.toObject(); delete source._id;
                 source.system.level.value = rank;
+                // (An item's own growth, Shining Wayfinder's 5 feet a step — castFromItem's growth, on its cast's message: its aura still 15 feet at
+                // the start, each step the item's feet instead of 10. 2026-10-29.)
+                const growth = Number(options.sourceMessageId ? game.messages.get(options.sourceMessageId)?.getFlag(MODULE_ID, "castFromItem")?.growth?.feet : NaN);
+                if (growth > 0) for (const rule of source.system.rules ?? []) if (rule.key === "Aura" && /badge/.test(String(rule.radius))) rule.radius = `${15 - growth} + @item.badge.value * ${growth}`;
                 source.flags ??= {}; source.flags[MODULE_ID] = { runtime: { castInstanceId: record.castId, sourceActorUuid: item.actor.uuid, sourceItemName: item.name } };
                 const [effect] = await item.actor.createEmbeddedDocuments("Item", [source]);
                 await this.ongoing.attach(journal, effect);
