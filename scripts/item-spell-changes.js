@@ -34,6 +34,8 @@ export function changedSpellSource(source, changes) {
     const traits = out.system.traits ??= {};
     if (changes.withoutTraits) traits.value = (traits.value ?? []).filter(trait => !changes.withoutTraits.includes(trait));
     if (changes.addTraits) traits.value = [...new Set([...(traits.value ?? []), ...changes.addTraits])];
+    // (Sorted, as PF2e prepares a spell's traits: a copy compared with PF2e's own under the same changes matches it.)
+    if (changes.withoutTraits || changes.addTraits) traits.value.sort();
     const overlays = Object.values(out.system.overlays ?? {});
     if (changes.area) {
         out.system.area = { ...(out.system.area ?? {}), type: changes.area.type, value: changes.area.value };
@@ -67,9 +69,10 @@ export function changedSpellSource(source, changes) {
     return out;
 }
 
-// A spell's system data as PF2e's own spell would be under the same item changes (its copy's itemCastChanges), or PF2e's own when it has none.
+// A spell's system data as PF2e's own spell would be under the same item changes (its copy's itemCastChanges), or PF2e's own when it has none:
+// PF2e's prepared data, as the copy's compared with it is (its source data has fewer fields — found live, 2026-10-29).
 export function expectedSpellSystem(official, item) {
     const changes = item?.flags?.[MODULE_ID]?.itemCastChanges ?? item?.getFlag?.(MODULE_ID, "itemCastChanges") ?? null;
-    const source = official?.toObject?.() ?? official;
-    return changes ? changedSpellSource(source, changes).system : source?.system;
+    const system = official?.system;
+    return changes ? changedSpellSource({ system: JSON.parse(JSON.stringify(system)) }, changes).system : system;
 }

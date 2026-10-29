@@ -28,7 +28,7 @@ test("an item's changes to its spell: traits less and more, its area with its va
     const before = structuredClone(source);
     const out = changedSpellSource(source, changes);
     assert.deepEqual(source, before);
-    assert.deepEqual(out.system.traits.value, ['manipulate', 'air']);
+    assert.deepEqual(out.system.traits.value, ['air', 'manipulate']);
     assert.deepEqual([out.system.area, out.system.overlays.x.system.area], [{type: 'cone', value: 30}, {type: 'cone', value: 30}]);
     assert.deepEqual([out.system.damage.a.type, out.system.damage.b.type], ['spirit', 'vitality']);
     assert.equal(out.system.description.value, '<p>@Damage[(2d6+4)[spirit]] and @Damage[1d6[persistent,spirit]|options:area-damage] and @Damage[1d8[healing]]</p>');
@@ -40,6 +40,6 @@ test("an item's damage type reaches the spell's damage stated in words, its own 
     const wall = {name: 'Wall of Ice', type: 'spell', system: {traits: {value: ['cold', 'concentrate', 'manipulate', 'water']}, damage: {0: {formula: '2d6', type: 'cold', kinds: ['damage']}},
         description: {value: '<p>A section … deals 2d6 cold damage to any creature passing through it. Its weakness to fire stays.</p><hr /><p>Heightened (+2) … the cold damage dealt to creatures crossing a destroyed section increases by 1d6.</p>'}}};
     const out = changedSpellSource(wall, itemSpellChanges({withoutTraits: ['cold', 'water'], addTraits: ['fire'], damageType: 'fire'}));
-    assert.deepEqual([out.system.traits.value, out.system.damage[0].type], [['concentrate', 'manipulate', 'fire'], 'fire']);
+    assert.deepEqual([out.system.traits.value, out.system.damage[0].type], [['concentrate', 'fire', 'manipulate'], 'fire']);
     assert.equal(out.system.description.value, '<p>A section … deals 2d6 fire damage to any creature passing through it. Its weakness to fire stays.</p><hr /><p>Heightened (+2) … the fire damage dealt to creatures crossing a destroyed section increases by 1d6.</p>');
 });
