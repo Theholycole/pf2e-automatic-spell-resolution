@@ -64,3 +64,16 @@ test('Corrosive Engravings, Draxie\'s powder, Purging Spell, Arclord\'s Codex, T
     assert.deepEqual(writs.choices[1].explode, {formula: '4d6', damageType: 'fire', statistic: 'reflex'});
     assert.deepEqual(activation("Tyrant's Writs").requires.spells, ['Animate Dead', 'Summon Undead']);
 });
+
+// (2026-10-29, the item module's ask) In the Shadows of Toil, read from the installed PF2e: Fatigued for a minute on a failed save, its spell
+// a prepared necromancy one with a save — the school the caster's call (the remaster has none).
+import {existsSync} from 'node:fs';
+test('In the Shadows of Toil: Fatigued 1 minute on a failed save; its necromancy spell the caster\'s call', async t => {
+    const packs = `${process.env.HOME}/.local/share/FoundryVTT/Data/systems/pf2e/packs/equipment`;
+    if (!existsSync(packs)) return t.skip('PF2e isn\'t installed here');
+    const {readDocuments} = await import('../../pf2e-automatic-ability-resolution/tools/leveldb.mjs');
+    const toil = readItemSpellshape(readDocuments(packs).find(entry => entry.name === 'In the Shadows of Toil'));
+    const [shape] = toil.activations;
+    assert.deepEqual([shape.requires.prepared, shape.requires.saves.length, shape.requires.anyTraits, shape.requires.table.length], [true, 3, undefined, 2]);
+    assert.deepEqual(['failure', 'criticalFailure'].map(degree => shape.riders[0].degrees[degree].map(entry => [entry.slug, entry.rounds])), [[['fatigued', 10]], [['fatigued', 10]]]);
+});

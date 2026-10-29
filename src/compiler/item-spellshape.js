@@ -29,6 +29,14 @@ export function readItemRequirements(text) {
     if (/^(?:a |an )?prepared /i.test(rest)) { requires.prepared = true; rest = rest.replace(/^(a |an )?prepared /i, "$1"); }
     const table = text => { requires.table = [...(requires.table ?? []), text]; };
     let m;
+    // (A school the remaster has done away with — no spell has its trait now —: the caster's call, as the user ruled for schools on 2026-10-10;
+    // In the Shadows of Toil's "necromancy spell that you prepared from this grimoire and that allows a saving throw", its "and" left by the
+    // grimoire's words taken out. Illusion is still a trait, so it's read as one below.)
+    if ((m = /^(?:a |an )?(abjuration|conjuration|divination|enchantment|evocation|necromancy|transmutation) spell (?:and )?that allows a saving throw$/i.exec(rest))) {
+        requires.saves = ["fortitude", "reflex", "will"];
+        table(`${/^[aeiou]/i.test(m[1]) ? "an" : "a"} ${m[1].toLowerCase()} spell (its caster's call: the remaster has no schools)`);
+        return requires;
+    }
     if (/^a Spell that requires a spell attack roll against Armor Class$/.test(rest)) requires.attack = true;
     else if ((m = new RegExp(`^a Spell of ${ORDINAL} level or lower that affects or targets only you$`).exec(rest))) { requires.maxRank = Number(m[1]); table("it affects or targets only you"); }
     else if (/^a Spell with an area of effect that deals the same type of damage as the depicted dragon's breath weapon$/.test(rest)) { requires.area = true; requires.damaging = true; table("it deals the depicted dragon's damage type"); }
@@ -150,6 +158,10 @@ const FORMS = [
     // PF2e's grimoires and instruments (2026-10-19):
     // Instructions for Lasting Agony (Excruciating Spell), Grudge Journal (Air Grievance).
     [/^you warp and twist the energy of the spell to cause intense pain\.$/, () => []],
+    // In the Shadows of Toil (2026-10-29, the item module's ask): Fatigued for a time on a failed save.
+    [/^you infuse the magic with sensations of endless toil\.$/, () => []],
+    [new RegExp(String.raw`^If the target fails its saving throw against the spell, it becomes ${COND} for (\d+) minutes? by the sense of exhaustion imbued in the magic\.$`),
+        m => ({ type: "conditions", degrees: { failure: [cond(m[1], m[2], m[3], { rounds: Number(m[4]) * 10 })], criticalFailure: [cond(m[1], m[2], m[3], { rounds: Number(m[4]) * 10 })] } })],
     [new RegExp(String.raw`^If the target fails its saving throw against the spell, it becomes ${COND} by the pain\.$`), m => ({ type: "conditions", degrees: { failure: [cond(m[1], m[2], m[3])], criticalFailure: [cond(m[1], m[2], m[3])] } })],
     [/^You inscribe the name or description of a creature you can see that has wronged you in some way\.$/, () => ({ type: "table", text: "the creature you inscribed" })],
     [new RegExp(String.raw`^the creature also becomes ${COND} unless it critically succeeds its saving throw\.$`),
