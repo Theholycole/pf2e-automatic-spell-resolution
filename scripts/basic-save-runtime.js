@@ -2232,7 +2232,9 @@ export class BasicSaveRuntime {
             const both = Number(weapon.system?.equipped?.handsHeld ?? 0) === 2;
             const die = twoHand && both ? twoHand : weapon.system.damage.die;
             const count = plan.resolution.weaponDamage.count + Math.max(0, Number(options.castRank ?? spell?.rank ?? plan.rank) - plan.resolution.weaponDamage.baseRank) * plan.resolution.weaponDamage.perRank;
-            weaponChoice = { dice: true, itemId: weapon.id, name: weapon.name, formula: `${count}${die}[${weapon.system.damage.damageType}]` };
+            // (All of it another type when an item casts it so — castFromItem's damageType, the entry's copy flagged castDamageType: Soulcutter's spirit.)
+            const typed = spell?.flags?.[MODULE_ID]?.castDamageType ?? weapon.system.damage.damageType;
+            weaponChoice = { dice: true, itemId: weapon.id, name: weapon.name, formula: `${count}${die}[${typed}]` };
         }
         else if (plan.resolution.weaponDamage) {
             const strikes = weaponStrikes(sourceActor);

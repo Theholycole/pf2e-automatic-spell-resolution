@@ -6,6 +6,7 @@ import { isDying, recoverFromDying, revivedNote } from './dying-recovery.js';
 import { coordinatorId } from './ongoing-core.js';
 import { IMMEDIATE_FLAG, PROFILES, DEGREES, degree, effectiveCheck, saveDegree, needsSave, readiness, recordCheck, correctTarget, validateChoices, checkAudience } from './immediate-core.js';
 import { castSpellFromUuid } from './cast-spell.js';
+import { expectedSpellSystem } from './item-spell-changes.js';
 import { shapeDisintegrated } from './spellshape-runtime.js';
 const stateOf = card => clone(card.getFlag(MODULE_ID, IMMEDIATE_FLAG));
 const tokenOf = target => target.documentName === 'Token' ? target : target.document?.documentName === 'Token' ? target.document : null;
@@ -21,8 +22,11 @@ export class ImmediateRuntime {
         const base = item.original ?? item, kind = base.slug ?? base.system.slug;
         const official = await fromUuid(`Compendium.pf2e.spells-srd.Item.${PROFILES[kind]}`);
         const normalized = text => String(text).replace(/<hr\s*\/?\s*>/gi,'<hr>').replace(/\s+/g,' ').trim();
-        if (!official || normalized(base.system.description.value) !== normalized(official.system.description.value)) throw Error('This spell differs from the verified immediate profile. GM review is required.');
-        for (const key of ['damage','defense','heightening','traits','range','target','time','area','overlays']) if (JSON.stringify(base.system[key]) !== JSON.stringify(official.system[key])) throw Error(`This spell’s ${key} differs from the verified profile.`);
+        // (An item's copy of the spell, changed by it through castFromItem — Fan of Soothing Winds' Heal in a cone, with air —: compared with PF2e's
+        // own under the same changes, 2026-10-29.)
+        const expected = official ? expectedSpellSystem(official, base) : null;
+        if (!official || normalized(base.system.description.value) !== normalized(expected.description.value)) throw Error('This spell differs from the verified immediate profile. GM review is required.');
+        for (const key of ['damage','defense','heightening','traits','range','target','time','area','overlays']) if (JSON.stringify(base.system[key]) !== JSON.stringify(expected[key])) throw Error(`This spell’s ${key} differs from the verified profile.`);
         return kind;
     }
     enqueue(work) { const p=this.#queue.catch(()=>{}).then(work); this.#queue=p; return p; }
@@ -68,7 +72,9 @@ export class ImmediateRuntime {
         }
         const kind=await this.verify(item), rank=Number(options.castRank??item.rank);
         const source=item.original??item;
-        let actions=kind==='disintegrate'?2:Number(options.actions??item.system.time.value);
+        // (Or the actions an item's cast says, Fan of Soothing Winds' 3-action Heal: castFromItem's actions, on its cast's message.)
+        const itemActions=options.sourceMessageId?Number(game.messages.get(options.sourceMessageId)?.getFlag(MODULE_ID,'castFromItem')?.actions)||null:null;
+        let actions=kind==='disintegrate'?2:Number(options.actions??itemActions??item.system.time.value);
         if(kind!=='disintegrate'&&![1,2,3].includes(actions)) {
             actions=await foundry.applications.api.DialogV2.prompt({window:{title:`${item.name} — casting actions`},content:'<p>How many actions did you spend on the native cast? Canceling does not refund resources.</p><select name="actions"><option value="1">1 action</option><option value="2">2 actions</option><option value="3">3 actions</option></select>',ok:{label:'Continue',callback:(_e,b)=>Number(b.form.elements.actions.value)},rejectClose:false});
             if(actions==null)return{status:'cancelled'};

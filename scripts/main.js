@@ -1560,7 +1560,7 @@ Hooks.once("init", () => {
             // (Another module's item casting a spell — the item module's consumables: cast through PF2e from a temporary entry with the item's numbers.)
             castFromItem: options => castSpellForItem(options),
             // (The options castFromItem takes beyond the basics, for other modules to check before passing them: an older module ignores unknown keys.)
-            castFromItemOptions: Object.freeze(["attackDegree", "saveFirst"]),
+            castFromItemOptions: Object.freeze(["attackDegree", "saveFirst", "withoutTraits", "addTraits", "area", "damageType", "actions"]),
             // (The items this module acts on — scrolls, wands, staves, spellhearts, catalysts, and what its item readers read — for other modules to leave alone.)
             claims: source => itemClaimed(source?.toObject?.() ?? source), claimsWhy: source => itemClaims(source?.toObject?.() ?? source),
             itemCasts: { read: source => readItemCasts(source), offer: item => offerItemCasts(item), cast: (item, index, options) => castFromItem(item, index, options), reservoir: (message, action) => runReservoirButton(message, action) },

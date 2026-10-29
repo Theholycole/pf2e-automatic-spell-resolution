@@ -11,6 +11,8 @@ import { loadNativeEffectTemplate, prepareNativeEffectSource, createNativeEffect
 import { shapeEffect, timedConditions } from "./spellshape-runtime.js";
 import { loseSpell } from "./casting-rules-runtime.js";
 import { MODULE_ID, activeGM, escapeHTML, gmIds, isCastMessage, ownerIds, randomID } from "./runtime-utils.js";
+import { changedSpellSource, itemSpellChanges } from "./item-spell-changes.js";
+export { changedSpellSource, itemSpellChanges } from "./item-spell-changes.js";
 import { rememberCastSpell } from "./cast-spell.js";
 
 const unlink = text => String(text ?? "").replace(/@UUID\[[^\]]+\]\{([^}]+)\}/g, "$1").replace(/@(?:Damage|Check|Template)\[([^\]]+)\](?:\{([^}]+)\})?/g, (all, inner, label) => label ?? inner.split("|")[0]);
@@ -303,8 +305,14 @@ export function spellDurationSeconds(source) {
  *   target (Spellstrike Ammunition); Disintegrate's card starts with it, a critical hit making the save one degree worse as the spell says (Disintegration Bolt).
  * - `saveFirst` ({statistic, dc}): the item's save before the spell, which has none of its own (Silencing Shot: "… subject to the effects of a 4th-rank Silence
  *   spell unless it succeeds at a DC 25 Will save") — each target rolls it; the spell is cast on those that fail, and not at all when none does.
+ * - The item's changes to the spell (2026-10-29, the item module's asks), made to the entry's copy of it only: `withoutTraits` (trait slugs it loses: Ivory
+ *   Baton's Dominate without mental, so a mindless creature is affected), `addTraits` (traits it gains: Gate Attenuator's Thunderstrike with metal),
+ *   `area` ({type, value}: Fan of Soothing Winds' Heal in a 30-foot cone, its 3-action variant's area too) and `damageType` (every damage instance of the
+ *   spell that type: Soulcutter's spirit Weapon Storm, its held weapon's dice too) — itemSpellChanges, scripts/item-spell-changes.js.
+ * - `actions` (1–3): the actions of a spell with action variants the item casts (Fan of Soothing Winds' 3-action Heal), so its route doesn't ask.
  */
-export async function castSpellForItem({ actor, token = null, spell, rank = null, dc = null, counteract = null, targets = null, item = null, attackDegree = null, saveFirst = null } = {}) {
+export async function castSpellForItem({ actor, token = null, spell, rank = null, dc = null, counteract = null, targets = null, item = null, attackDegree = null, saveFirst = null, withoutTraits = null, addTraits = null, area = null, damageType = null, actions = null } = {}) {
+    if (actions != null && ![1, 2, 3].includes(Number(actions))) throw new Error("castFromItem: actions is 1, 2 or 3.");
     if (!actor) throw new Error("castFromItem: the actor is missing.");
     if (attackDegree != null && !["success", "criticalSuccess"].includes(attackDegree)) throw new Error("castFromItem: attackDegree is \"success\" or \"criticalSuccess\" (a hit).");
     let saves = null;
@@ -323,8 +331,11 @@ export async function castSpellForItem({ actor, token = null, spell, rank = null
         if (!targets.length) return { message: null, resisted: true, saves: saves.map(({ name, degree }) => ({ name, degree })) };
     }
     const uuid = typeof spell === "string" ? spell : spell?.uuid ?? spell?._stats?.compendiumSource ?? spell?.flags?.core?.sourceId ?? null;
-    const source = typeof spell === "string" ? (await fromUuid(spell))?.toObject() : spell ? foundry.utils.deepClone(spell.toObject?.() ?? spell) : null;
-    if (source?.type !== "spell") throw new Error("castFromItem: the spell isn't a spell (a spells-srd UUID or its source).");
+    const read = typeof spell === "string" ? (await fromUuid(spell))?.toObject() : spell ? foundry.utils.deepClone(spell.toObject?.() ?? spell) : null;
+    if (read?.type !== "spell") throw new Error("castFromItem: the spell isn't a spell (a spells-srd UUID or its source).");
+    // (The item's changes to its copy of the spell, and a key of its own for that copy: an unchanged one isn't reused for it.)
+    const changes = itemSpellChanges({ withoutTraits, addTraits, area, damageType });
+    const source = changes ? changedSpellSource(read, changes) : read;
     const cantrip = (source.system?.traits?.value ?? []).includes("cantrip");
     const autoHeighten = Math.max(1, Math.ceil(Number(actor.level ?? 1) / 2));
     const castRank = Number(rank) > 0 ? Number(rank) : cantrip ? autoHeighten : Number(source.system?.level?.value ?? 1);
@@ -345,7 +356,7 @@ export async function castSpellForItem({ actor, token = null, spell, rank = null
             await numbersEffect.update({ "system.rules": rules });
         }
     }
-    const made = await entrySpell(actor, entry, uuid ?? `castFromItem.${source.name}`, castRank, cantrip, uuid ? null : source);
+    const made = await entrySpell(actor, entry, `${uuid ?? `castFromItem.${source.name}`}${changes ? `#${changes.key}` : ""}`, castRank, cantrip, uuid && !changes ? null : source);
     // (Temporary: the entry, the spell and the numbers' Effect go once the spell's duration has passed — at least 10 minutes, at most an hour.)
     const until = Number(game.time.worldTime) + Math.min(3600, Math.max(600, spellDurationSeconds(source)));
     const temporary = { until, itemUuid, combatId: game.combat?.started ? game.combat.id : null };
@@ -364,7 +375,7 @@ export async function castSpellForItem({ actor, token = null, spell, rank = null
     for (let i = 0; i < 40 && !message; i++) { message = game.messages.contents.slice(mark).find(entry => isCastMessage(entry) && entry.actor === actor); if (!message) await new Promise(resolve => setTimeout(resolve, 250)); }
     if (message) {
         await message.setFlag(MODULE_ID, "castFromItem", { itemName: holder.name, itemUuid, rank: castRank, dc: numbers.dc, counteract: counteract != null ? Number(counteract) : null,
-            targets: tokens.map(entry => entry.document?.uuid ?? entry.uuid).filter(Boolean), ...(attackDegree ? { attackDegree } : {}) }).catch(() => null);
+            targets: tokens.map(entry => entry.document?.uuid ?? entry.uuid).filter(Boolean), ...(attackDegree ? { attackDegree } : {}), ...(actions != null ? { actions: Number(actions) } : {}) }).catch(() => null);
         // (The card's header names the item.)
         await message.update({ flavor: `<strong>${escapeHTML(holder.name)}</strong>${message.flavor ? ` ${message.flavor}` : ""}` }).catch(() => null);
     }
