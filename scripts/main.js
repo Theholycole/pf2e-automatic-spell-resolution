@@ -8,7 +8,7 @@ import { markedAtZero } from "./attack-shapes-runtime.js";
 import { linkOnDamage, furyOnDamage, leechOnCast } from "./trigger-runtime.js";
 import { revivalEnded, holdNoHealing } from "./revival-runtime.js";
 import { holdCovenant, covenantKept } from "./support-runtime.js";
-import { recordShaping, shapeRidersFor, shapeTypeSwapFor, noteWandUse, armSpellshape, widenCastTemplate, shapeTieEnded, syncShapeFollow, shapeOnApplied, shapeTerrainFromTemplate, shapeTerrainMove, shapeTerrainTurnEnd, expireShapeTerrain, bindTerrainButtons, growGarland, runShapeCard, detonateShapeCircle, detonateOnTurn, bindShapeCardButtons, turnStartShapeHeal, shapeWatchMessage, shapeRollSpent, shapeAreaFromTemplate, shapeTurnStart, stillInFlames, shapeScaleOnCreate, energyRuneOnCard } from "./spellshape-runtime.js";
+import { recordShaping, shapeRidersFor, shapeTypeSwapFor, noteWandUse, armSpellshape, widenCastTemplate, shapeTieEnded, syncShapeFollow, shapeOnApplied, shapeTerrainFromTemplate, shapeTerrainMove, shapeTerrainTurnEnd, expireShapeTerrain, bindTerrainButtons, growGarland, refundSlot, runShapeCard, detonateShapeCircle, detonateOnTurn, bindShapeCardButtons, turnStartShapeHeal, shapeWatchMessage, shapeRollSpent, shapeAreaFromTemplate, shapeTurnStart, stillInFlames, shapeScaleOnCreate, energyRuneOnCard } from "./spellshape-runtime.js";
 import { installFormGuards } from './form-native-guards.js';
 import { registerPersistentLinks } from "./persistent-link-runtime.js";
 import { registerSetAside } from "./set-aside-runtime.js";
@@ -42,7 +42,8 @@ import { loadNativeEffectTemplate, prepareNativeEffectSource, createNativeEffect
 import { whisperGmNotes, hideGmNotes, markEffectGmNotes, markEffectGmNotesUpdate, markExistingGmNotes } from "./gm-notes.js";
 import { noteWatchMessage, noteWatchEndTurn } from "./note-watchers.js";
 import { bloodMagicOnCast, runBloodMagic, spiteStrikes, spiteTurnStart, bindBloodMagicButtons } from "./blood-magic-runtime.js";
-import { castingRulesOnCast, runCastingRule, bindCastingRuleButtons, spellLikeCast } from "./casting-rules-runtime.js";
+import { castingRulesOnCast, runCastingRule, bindCastingRuleButtons, spellLikeCast, loseSpell } from "./casting-rules-runtime.js";
+import { castRankOf } from "./runtime-utils.js";
 import { armItemSpellshape, runItemShapeCard, bindItemShapeButtons, itemShapeTurnStart, itemShapeWatchMessage, starChartOnCast, catalystSporesOnDamage, shieldShardsBlock } from "./item-spellshape-runtime.js";
 import { readItemSpellshape } from "../src/compiler/item-spellshape.js";
 import { offerItemCasts, castFromItem, itemCastOnCard, bindItemCastButtons, reservoirOnCast, reservoirOnStrike, runReservoirButton, reservoirExpend, reservoirCast, reservoirHeld, castSpellForItem, sweepItemCastTemps } from "./item-cast-runtime.js";
@@ -1561,6 +1562,12 @@ Hooks.once("init", () => {
             castFromItem: options => castSpellForItem(options),
             // (The options castFromItem takes beyond the basics, for other modules to check before passing them: an older module ignores unknown keys.)
             castFromItemOptions: Object.freeze(["attackDegree", "saveFirst", "withoutTraits", "addTraits", "area", "damageType", "actions", "growth"]),
+            // (A cast another module's item acts on, by its message — Starless Scope's reaction, 2026-10-29: its spell lost (disrupted), or its slot
+            // given back.)
+            casting: {
+                lose: (messageId, reason) => { const message = game.messages.get(messageId); if (!message) throw new Error("casting.lose: no such cast message."); return loseSpell(message, reason); },
+                refundSlot: (messageId, label) => { const message = game.messages.get(messageId); const spell = message?.item; if (!spell?.actor) throw new Error("casting.refundSlot: no such cast."); return refundSlot(spell.actor, spell, castRankOf(message) ?? spell.rank, label ?? spell.name); }
+            },
             // (The items this module acts on — scrolls, wands, staves, spellhearts, catalysts, and what its item readers read — for other modules to leave alone.)
             claims: source => itemClaimed(source?.toObject?.() ?? source), claimsWhy: source => itemClaims(source?.toObject?.() ?? source),
             itemCasts: { read: source => readItemCasts(source), offer: item => offerItemCasts(item), cast: (item, index, options) => castFromItem(item, index, options), reservoir: (message, action) => runReservoirButton(message, action), reservoirExpend: options => reservoirExpend(options), reservoirCast: options => reservoirCast(options), reservoirHeld: options => reservoirHeld(options) },
