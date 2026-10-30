@@ -66,6 +66,18 @@ async function itemEntry(actor, item, tradition, numbers, autoHeighten) {
             await stat.update({ "system.rules": rules });
         }
     }
+    // (And its DC apart from its attack when the item states both, Animate Dreamer's +25 and DC 33 — found live 2026-10-29, PF2e's DC then 10
+    // + the attack: a modifier on the statistic's DC alone, PF2e's `<slug>-dc` domain, calibrated like the attack.)
+    if (numbers.dc != null) {
+        const current = Number(actor.items.get(entry.id)?.statistic?.dc?.value ?? NaN);
+        const rules = foundry.utils.deepClone(actor.items.get(stat.id)?.system?.rules ?? stat.system.rules);
+        let own = rules.find(rule => rule.key === "FlatModifier" && rule.selector === `${slug}-dc`);
+        if (Number.isFinite(current) && current !== numbers.dc) {
+            if (!own) rules.push(own = { key: "FlatModifier", selector: `${slug}-dc`, value: 0, label: `${item.name} (DC)` });
+            own.value = Number(own.value) + numbers.dc - current;
+            await actor.items.get(stat.id).update({ "system.rules": rules });
+        }
+    }
     return actor.items.get(entry.id);
 }
 
