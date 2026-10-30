@@ -46,6 +46,7 @@ import { castingRulesOnCast, runCastingRule, bindCastingRuleButtons, spellLikeCa
 import { castRankOf } from "./runtime-utils.js";
 import { armItemSpellshape, runItemShapeCard, bindItemShapeButtons, itemShapeTurnStart, itemShapeWatchMessage, starChartOnCast, catalystSporesOnDamage, shieldShardsBlock } from "./item-spellshape-runtime.js";
 import { readItemSpellshape } from "../src/compiler/item-spellshape.js";
+import { reaimCast, reaimableCast } from "./reaim-runtime.js";
 import { offerItemCasts, castFromItem, itemCastOnCard, bindItemCastButtons, reservoirOnCast, reservoirOnStrike, runReservoirButton, reservoirExpend, reservoirCast, reservoirHeld, castSpellForItem, sweepItemCastTemps } from "./item-cast-runtime.js";
 import { readItemCasts } from "../src/compiler/item-casts.js";
 import { claims as itemClaimed, itemClaims } from "../src/compiler/item-claims.js";
@@ -1566,7 +1567,11 @@ Hooks.once("init", () => {
             // given back.)
             casting: {
                 lose: (messageId, reason) => { const message = game.messages.get(messageId); if (!message) throw new Error("casting.lose: no such cast message."); return loseSpell(message, reason); },
-                refundSlot: (messageId, label) => { const message = game.messages.get(messageId); const spell = message?.item; if (!spell?.actor) throw new Error("casting.refundSlot: no such cast."); return refundSlot(spell.actor, spell, castRankOf(message) ?? spell.rank, label ?? spell.name); }
+                refundSlot: (messageId, label) => { const message = game.messages.get(messageId); const spell = message?.item; if (!spell?.actor) throw new Error("casting.refundSlot: no such cast."); return refundSlot(spell.actor, spell, castRankOf(message) ?? spell.rank, label ?? spell.name); },
+                // (A cast at an item's user turned back at its caster or redirected — Cayden's Tankard's fear effect, Scale of Igroon's reflected
+                // energy, 2026-10-29: scripts/reaim-runtime.js.)
+                reaimable: options => { const message = reaimableCast(options); return message ? { messageId: message.id, timestamp: Number(message.timestamp) || 0, spell: message.item?.name ?? null } : null; },
+                reaim: options => reaimCast(options),
             },
             // (The items this module acts on — scrolls, wands, staves, spellhearts, catalysts, and what its item readers read — for other modules to leave alone.)
             claims: source => itemClaimed(source?.toObject?.() ?? source), claimsWhy: source => itemClaims(source?.toObject?.() ?? source),
