@@ -2,7 +2,7 @@
   "id": "pf2e-automatic-resolution",
   "title": "PF2e Automatic Spell Resolution",
   "description": "Interactive, confirmation-first execution of compiled PF2e Effects and saving-throw outcomes.",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "compatibility": {
     "minimum": "14",
     "verified": "14"
@@ -14,7 +14,7 @@
   ],
   "url": "https://github.com/Theholycole/pf2e-automatic-spell-resolution",
   "manifest": "https://github.com/Theholycole/pf2e-automatic-spell-resolution/releases/latest/download/module.json",
-  "download": "https://github.com/Theholycole/pf2e-automatic-spell-resolution/releases/download/v0.11.0/module.zip",
+  "download": "https://github.com/Theholycole/pf2e-automatic-spell-resolution/releases/download/v0.11.1/module.zip",
   "readme": "https://github.com/Theholycole/pf2e-automatic-spell-resolution#readme",
   "bugs": "https://github.com/Theholycole/pf2e-automatic-spell-resolution/issues",
   "license": "LICENSE",
