@@ -87,7 +87,7 @@ test('Tome of Scintillating Sleet: Dazzled for the damaged, Blinded then Dazzled
     const [shape] = readItemSpellshape(readDocuments(packs).find(entry => entry.name === 'Tome of Scintillating Sleet')).activations;
     assert.deepEqual([shape.requires.anyTraits, shape.requires.damaging], [['cold'], true]);
     const [damaged, save, attack] = shape.riders;
-    assert.deepEqual([damaged.when, damaged.list.map(entry => [entry.slug, entry.rounds])], ['damaged', [['dazzled', 3]]]);
+    assert.deepEqual([damaged.when, damaged.list.map(entry => [entry.slug, entry.rounds]), damaged.insteadOn], ['damaged', [['dazzled', 3]], {save: ['criticalFailure'], attack: ['criticalSuccess']}]);
     assert.deepEqual([save.saveOnly, save.degrees.criticalFailure.map(entry => [entry.slug, entry.rounds])], [true, [['blinded', 1], ['dazzled', 4]]]);
     assert.deepEqual([attack.attackOnly, attack.degrees.criticalSuccess.map(entry => [entry.slug, entry.rounds])], [true, [['blinded', 1], ['dazzled', 4]]]);
     assert.equal(unmetRequirement(shape.requires, facts({traits: ['cold'], damageTypes: ['cold']})), null);

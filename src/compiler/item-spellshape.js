@@ -167,6 +167,8 @@ const FORMS = [
     [new RegExp(String.raw`^If an affected creature critically failed its save against the required spell, or if you critically succeeded on your spell attack roll against the creature, it's instead ${COND} for (\d+) rounds? and then dazzled for (\d+) rounds\.$`),
         (m, context) => { const before = context.riders.findLast(rider => rider.type === "conditions" && rider.when === "damaged" && rider.list?.[0]?.slug === "dazzled"); if (!before) return null;
             const blind = cond(m[1], m[2], m[3], { rounds: Number(m[4]) }), dazzled = { ...before.list[0], rounds: Number(m[4]) + Number(m[5]) };
+            // ("it's instead …": the damaged creature's Dazzled not given on those rows — found live, 2026-10-29, both Effects on the creature.)
+            before.insteadOn = { save: ["criticalFailure"], attack: ["criticalSuccess"] };
             // (A save spell's degree is its target's, an attack spell's the caster's: each row only for its kind.)
             return [{ type: "conditions", saveOnly: true, degrees: { criticalFailure: [blind, dazzled] } }, { type: "conditions", attackOnly: true, degrees: { criticalSuccess: [{ ...blind }, { ...dazzled }] } }]; }],
     // In the Shadows of Toil (2026-10-29, the item module's ask): Fatigued for a time on a failed save.
