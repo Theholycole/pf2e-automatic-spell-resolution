@@ -13,6 +13,7 @@ import { loadNativeEffectTemplate, prepareNativeEffectSource, createNativeEffect
 import { tokenDistance, tokenDocumentDistance } from "./token-distance.js";
 import { DEGREES, MODULE_ID, activeGM, allied, core, escapeHTML, gmIds } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const damageRollClass = () => CONFIG.Dice.rolls.find(roll => roll.name === "DamageRoll");
 const capital = text => `${text[0].toUpperCase()}${text.slice(1)}`;
 
@@ -261,7 +262,7 @@ export async function itemShapeTurnStart(combat) {
         if (area.who === "enemies" && allied(creature, caster)) continue;
         const centerDoc = area.center.actorUuid ? other : { ...area.center };
         if (tokenDocumentDistance(centerDoc, token, { gridSize: canvas.grid.size, gridDistance: canvas.dimensions.distance }) > area.radius) continue;
-        if (immuneTo(creature, area.name, caster.uuid)) continue;
+        if (immuneTo(creature, area.name, caster.uuid)) { noticeImmunity({ actor: creature, token, blocked: area.name, why: `temporarily immune to ${caster.name}'s ${area.name}` }); continue; }
         const degree = await rollSave(creature, area.statistic, area.dc, area.name);
         const results = await applyOutcome(creature, caster, area.name, area.outcomes?.[degree], area.dc);
         if (degree === "criticalSuccess" && area.immuneRounds) await makeImmune(creature, area.name, caster.uuid, { value: area.immuneRounds, unit: "rounds", expiry: "turn-start", sustained: false });
@@ -341,7 +342,7 @@ export async function runItemShapeCard(message, button) {
         }
     } else if (rider.type === "save-card") {
         for (const token of tokens) {
-            if (immuneTo(token.actor, data.name, caster.uuid)) { results.push(`${token.name} is immune`); continue; }
+            if (immuneTo(token.actor, data.name, caster.uuid)) { results.push(`${token.name} is immune`); noticeImmunity({ actor: token.actor, token, blocked: data.name, why: `temporarily immune to ${caster.name}'s ${data.name}` }); continue; }
             const degree = await rollSave(token.actor, rider.statistic, data.dc, data.name);
             const applied = await applyOutcome(token.actor, caster, data.name, rider.outcomes?.[degree], data.dc);
             // ("Regardless of the results, the target then becomes immune to Bewildering Walls for 24 hours.")

@@ -13,6 +13,7 @@ import { counteracts } from "./affliction-care-core.js";
 import { riderChoice, startShapeCard, highestCastableRank } from "./spellshape-runtime.js";
 import { MODULE_ID, activeGM, escapeHTML, plainText } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const CONDITION_LINK = /@UUID\[Compendium\.pf2e\.conditionitems\.(?:Item\.)?[A-Za-z0-9]+\]\{([A-Za-z]+)\}/g;
 
 const FORMS = [
@@ -101,7 +102,7 @@ export async function counteractFeature(message, { pickIndex = null, alternative
     if (alternative && read.alternative) {
         // (Snuff Out's creature: the void damage, basic save; then immune for a minute.)
         const alt = read.alternative;
-        if ((target.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.counteractImmune === item?.name)) { await say(`${escapeHTML(target.name)} is temporarily immune.`); return { refused: "immune" }; }
+        if ((target.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.counteractImmune === item?.name)) { noticeImmunity({ actor: target, blocked: item?.name ?? "Snuff Out", why: "temporarily immune" }); await say(`${escapeHTML(target.name)} is temporarily immune.`); return { refused: "immune" }; }
         const level = Number(actor.level ?? 1);
         const token = target.getActiveTokens?.(true, false)?.[0];
         const dc = Number(actor.spellcasting?.regular?.[0]?.statistic?.dc?.value ?? actor.attributes?.classOrSpellDC?.value ?? NaN);

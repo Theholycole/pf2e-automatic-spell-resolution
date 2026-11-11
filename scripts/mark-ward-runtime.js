@@ -4,6 +4,7 @@
 import { escapeHTML, MODULE_ID } from "./runtime-utils.js";
 import { createNativeEffect, loadNativeEffectTemplate, prepareNativeEffectSource } from "./native-outcome-effects.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const wardOf = actor => (actor?.itemTypes?.effect ?? []).find(effect => effect.flags?.[MODULE_ID]?.markWard && !effect.isExpired);
 
 /** Whether the creature is of the tradition: one of its creature types, or a dragon or spellcaster of it. */
@@ -24,7 +25,7 @@ export async function markWardTrigger(attacker, targets, start) {
         const data = ward.flags[MODULE_ID].markWard;
         if (attacker.uuid === data.casterUuid || (data.asked ?? []).includes(attacker.uuid) || wardOf(attacker)?.flags?.[MODULE_ID]?.markWard?.castId === data.castId) continue;
         const key = data.plan?.resolution?.temporaryImmunity?.key;
-        if (key && (attacker.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === key && !effect.isExpired)) continue;
+        if (key && (attacker.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === key && !effect.isExpired)) { noticeImmunity({ actor: attacker, blocked: data.plan?.source?.name ?? ward.name ?? "the ward's save", why: "temporarily immune after an earlier save", once: `${data.castId}:${attacker.uuid}:ward` }); continue; }
         // (Asked once — on each warded creature's Effect — until the save's immunity covers it.)
         for (const holder of [ward, ...(await Promise.all((data.holders ?? []).map(uuid => fromUuid(uuid))))].filter(Boolean)) {
             const held = holder.flags?.[MODULE_ID]?.markWard;

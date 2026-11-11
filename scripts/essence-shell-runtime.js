@@ -2,6 +2,7 @@ import { MODULE_ID } from "./effect-runtime.js";
 import { escapeHTML, randomID } from "./runtime-utils.js";
 import { ESSENCE_SCHOOLS, essenceShellSpellSource } from "../src/compiler/essence-shell.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 // Essence Eating Shell (Magus+), run by the module: after a Spellstrike of a magus who has the feat (its attack roll not a critical failure), a card asks whether the
 // shell was an essence eating one and the shell spell's school — the caster's pick (the user, 2026-10-10: the remaster has no schools). Its control starts the
 // school's effect (src/compiler/essence-shell.js) on the Spellstrike's initial target and on the magus, each on the module's save card at the caster's spell DC; the
@@ -60,6 +61,8 @@ export async function resolveEssenceShell(message, { school = null } = {}) {
     await message.setFlag(MODULE_ID, "essenceShell", { ...data, done: true, school: picked });
     // (Necromancy: "If any creature would not be affected by the type of damage dealt by this effect, this effect does not occur for any creature".)
     if (built.effect.fizzleType && sides.some(side => (side.token.actor.attributes?.immunities ?? []).some(entry => entry.type === built.effect.fizzleType))) {
+        for (const side of sides.filter(one => (one.token.actor.attributes?.immunities ?? []).some(entry => entry.type === built.effect.fizzleType)))
+            noticeImmunity({ actor: side.token.actor, token: side.token, blocked: `Essence Eating Shell (${title(picked)})`, why: `immune to ${built.effect.fizzleType}; the effect fizzles for both creatures` });
         await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: caster }), content: `<p><strong>Essence Eating Shell (${title(picked)})</strong>: a creature isn't affected by ${built.effect.fizzleType} damage, so the effect fizzles for both (the Spellstrike still applies).</p>` }).catch(() => null);
         return { status: "fizzled", school: picked };
     }
@@ -67,6 +70,7 @@ export async function resolveEssenceShell(message, { school = null } = {}) {
     for (const side of sides) {
         // (Transmutation on a creature immune to sickened: its basic Fortitude damage instead, and the Speed penalty for a round after a failure.)
         const immune = picked === "transmutation" && (side.token.actor.attributes?.immunities ?? []).some(entry => entry.type === "sickened");
+        if (immune) noticeImmunity({ actor: side.token.actor, token: side.token, blocked: "sickened", why: "immune to sickened; its basic Fortitude damage instead", source: "Essence Eating Shell (Transmutation)" });
         const { effect, source } = immune ? essenceShellSpellSource("transmutation-immune", { rank: data.rank }) ?? built : built;
         const item = new CONFIG.Item.documentClass({ ...source, _id: randomID() }, { parent: caster });
         const plan = await api.compile(item);

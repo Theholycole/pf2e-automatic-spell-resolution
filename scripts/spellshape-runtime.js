@@ -19,6 +19,7 @@ import { readActionShape } from "./spell-actions-runtime.js";
 import { catalystCastRider, catalystSaveRider, catalystSummoned } from "./catalyst-runtime.js";
 import { MODULE_ID, activeGM, escapeHTML, familiarOf } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 // (A wand just used: its charge spent moments before or after its spell's card.)
 const recentWandUse = new Map();
 
@@ -902,7 +903,9 @@ export function shapeTypeSwapFor(messageId) {
 /** Reporting Spell: one enemy the spell affected (not immune), one fact the caster picks, whispered to the caster and the GM; that enemy immune for a day. */
 async function reportingSpell(state, entries, shape, rider, caster) {
     const immune = actor => (actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellshapeImmunity?.name === shape.name);
-    const enemies = entries.filter(entry => entry.target.excluded !== true && entry.actor && entry.actor !== caster && !(entry.actor.alliance && entry.actor.alliance === caster.alliance) && !immune(entry.actor));
+    const foes = entries.filter(entry => entry.target.excluded !== true && entry.actor && entry.actor !== caster && !(entry.actor.alliance && entry.actor.alliance === caster.alliance));
+    for (const entry of foes.filter(one => immune(one.actor))) noticeImmunity({ actor: entry.actor, blocked: shape.name, why: "temporarily immune (learned about within a day)" });
+    const enemies = foes.filter(entry => !immune(entry.actor));
     if (!enemies.length) return [{ label: `${shape.name}: no enemy the spell affected can be learned about`, status: "skipped" }];
     const pickedUuid = await riderChoice(shape, "Which enemy do you learn about?", enemies.map(entry => ({ value: entry.actor.uuid, label: entry.actor.name })));
     const enemy = (enemies.find(entry => entry.actor.uuid === pickedUuid) ?? enemies[0]).actor;
@@ -1537,13 +1540,15 @@ export async function applyShapeRiders(state, target, actor, token, { DamageRoll
             if ((attack ? rider.insteadOn?.attack : rider.insteadOn?.save)?.includes(degree)) continue;
             // ("If the creature is immune to emotion, fear, or mental effects, it is immune to this frightened condition.")
             const immunities = (actor.attributes?.immunities ?? actor.system?.attributes?.immunities ?? []).map(entry => entry.type ?? entry);
-            if ((rider.unlessImmune ?? []).some(type => immunities.includes(type))) continue;
+            const immuneType = (rider.unlessImmune ?? []).find(type => immunities.includes(type));
             // ("If the targeted creature is an enemy …": not the caster's allies.)
             if (rider.enemiesOnly && caster && (actor === caster || (actor.alliance && actor.alliance === caster.alliance))) continue;
             // ("As long as your spell attack is successful": a hit.)
             const hit = attack && ["success", "criticalSuccess"].includes(degree);
             const list = rider.when === "damaged" ? (damaged ? rider.list : []) : rider.when === "hit-or-failed" ? (hitOrFailed ? rider.list : []) : rider.when === "hit" ? (hit ? rider.list : []) : rider.degrees?.[degree] ?? [];
-            if (list.length) results.push(...await timedConditions(actor, list, shape.name, options));
+            // (2026-11-11: a creature immune to it — the GM told, the conditions it would have had named.)
+            if (list.length && immuneType) noticeImmunity({ actor, blocked: list.map(entry => `${entry.slug ?? entry.name ?? "a condition"}${entry.value ? ` ${entry.value}` : ""}`).join(", "), why: `immune to ${immuneType}`, source: shape.name });
+            else if (list.length) results.push(...await timedConditions(actor, list, shape.name, options));
         } else if (rider.type === "generated") {
             if (rider.when === "damaged" && !damaged) continue;
             if (rider.degrees && !rider.degrees.includes(degree)) continue;
@@ -1712,9 +1717,10 @@ export async function applyShapeRiders(state, target, actor, token, { DamageRoll
             const hp = actor.hitPoints ?? actor.system?.attributes?.hp;
             if (rider.belowHalf && !(Number(hp?.value ?? 0) + taken < Number(hp?.max ?? 0) / 2)) continue;
             if (rider.inDominion && !inDominionOf(caster, token)) continue;
-            if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellshapeImmunity?.name === shape.name)) continue;
+            if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellshapeImmunity?.name === shape.name)) { noticeImmunity({ actor, blocked: shape.name, why: "temporarily immune" }); continue; }
             const immunities = (actor.attributes?.immunities ?? actor.system?.attributes?.immunities ?? []).map(entry => entry.type ?? entry);
-            if ((rider.unlessImmune ?? []).some(type => immunities.includes(type))) continue;
+            const immuneType = (rider.unlessImmune ?? []).find(type => immunities.includes(type));
+            if (immuneType) { noticeImmunity({ actor, blocked: shape.name, why: `immune to ${immuneType}` }); continue; }
             results.push(...await timedConditions(actor, rider.list, shape.name, options));
             await actor.createEmbeddedDocuments("Item", [{ name: `${shape.name}: immune`, type: "effect", img: "icons/svg/aura.svg", flags: { [MODULE_ID]: { spellshapeImmunity: { name: shape.name } } },
                 system: { duration: { value: rider.immunityMinutes, unit: "minutes", expiry: null, sustained: false }, start: { value: game.time.worldTime, initiative: null }, tokenIcon: { show: false } } }]);
@@ -1887,6 +1893,7 @@ export async function finishShapeRiders(state, entries) {
             const type = rider.typeFromSpell ? state.shapeSpell?.damageTypes?.[0] ?? null : null;
             const resists = actor => [...(actor.attributes?.resistances ?? []), ...(actor.attributes?.immunities ?? [])].some(entry => entry.type === type);
             const immune = actor => (actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellshapeImmunity?.name === shape.name);
+            for (const entry of damagedEntries.filter(one => immune(one.actor))) noticeImmunity({ actor: entry.actor, blocked: shape.name, why: "temporarily immune" });
             const candidates = damagedEntries.filter(entry => !(rider.unlessResists && resists(entry.actor)) && !immune(entry.actor));
             if (!candidates.length) continue;
             const pickedUuid = await riderChoice(shape, "Which creature?", candidates.map(entry => ({ value: entry.actor.uuid, label: entry.actor.name })));
@@ -2731,7 +2738,7 @@ export async function runShapeCard(message, { at = null, choice = null } = {}) {
             try { await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: caster }), content: `<p><strong>${escapeHTML(data.name)}</strong>: ${escapeHTML(target.name)} is above level ${Number(caster.level ?? 0) - rider.levelGap}: unaffected.</p>` }); } catch (_) {}
             return { degree: null, tooHigh: true };
         }
-        if ((target.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellshapeImmunity?.name === data.name)) return { degree: null, immune: true };
+        if ((target.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellshapeImmunity?.name === data.name)) { noticeImmunity({ actor: target, token, blocked: data.name, why: "temporarily immune" }); return { degree: null, immune: true }; }
         const dc = shapeDC(caster, spell);
         const roll = await target.saves?.[rider.statistic]?.roll({ dc: { value: dc }, skipDialog: true });
         const degree = ["criticalFailure", "failure", "success", "criticalSuccess"][Number(roll?.degreeOfSuccess ?? 2)];

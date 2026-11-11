@@ -10,6 +10,7 @@ import { AFFLICTION_HANDLER as HANDLER } from "./runtime-utils.js";
 import { afflictionCounteractRank, afflictionStage, afflictionStageDelta, carePlanAtRank, counteracts, durationSeconds, isExecutableCarePlan,
     nextAfflictionBadge, stageLengthSeconds } from "./affliction-care-core.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const esc = value => foundry.utils.escapeHTML(String(value ?? ""));
 const DEGREES = ["critical failure", "failure", "success", "critical success"];
 const span = d => `${d.value} ${d.value === 1 ? d.unit.replace(/s$/, "") : d.unit}`;
@@ -165,6 +166,7 @@ export class AfflictionCareRuntime {
         const care = carePlanAtRank(plan.resolution, castRank);
         // "If the target is immune to poison, this spell has no effect."
         if (care.negatedByImmunity && actor?.attributes?.immunities?.some?.(entry => entry.type === care.negatedByImmunity)) {
+            noticeImmunity({ actor, token, blocked: spell.name, why: `immune to ${care.negatedByImmunity}` });
             return await this.#report(spell, actor, castRank, [{ label: `${actor.name} is immune to ${care.negatedByImmunity}: ${spell.name} has no effect.`, status: "negated" }]);
         }
         const key = spell.slug ?? spell.system.slug;

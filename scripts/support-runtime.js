@@ -10,6 +10,7 @@ import { loadNativeEffectTemplate, prepareNativeEffectSource, createNativeEffect
 import { tokenDistance } from "./token-distance.js";
 import { DamageRollClass, MODULE_ID, escapeHTML, post as say } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const traitsOf = actor => actor.traits ?? new Set(actor.system?.traits?.value ?? []);
 const has = (actor, trait) => { const traits = traitsOf(actor); return traits.has?.(trait) ?? traits.includes?.(trait); };
 const living = actor => !has(actor, "undead") && !has(actor, "construct");
@@ -46,7 +47,7 @@ export async function covenantPart({ caster, spell, data, phase, tokens }) {
     const out = [];
     for (const token of tokens) {
         const actor = token.actor;
-        if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.covenantImmune?.key === key)) { out.push({ name: token.name, immune: true }); continue; }
+        if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.covenantImmune?.key === key)) { out.push({ name: token.name, immune: true }); noticeImmunity({ actor, token, blocked: data.spellName, why: "immune until its next daily preparations" }); continue; }
         await actor.createEmbeddedDocuments("Item", [{ name: `${data.spellName}: the pact`, type: "effect", img: spell.img ?? "icons/svg/angel.svg",
             flags: { [MODULE_ID]: { covenant: { key, spell: data.spellName, hp: phase.hp, wounded: phase.wounded, effectUuid: phase.effectUuid, casterUuid: caster.uuid, rank: Number(data.castRank) } } },
             system: { duration: { value: -1, unit: "unlimited", expiry: null, sustained: false }, tokenIcon: { show: true },

@@ -7,6 +7,7 @@
 import { shapeEffect, riderChoice, refundSlot } from "./spellshape-runtime.js";
 import { MODULE_ID, activeGM, escapeHTML, plainText, say } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const STUPEFIED = "Compendium.pf2e.conditionitems.Item.e1XGnhKNSQIm5IXg";
 
 const FORMS = [
@@ -53,7 +54,7 @@ export async function freeFocusOnCard(message) {
     const read = item ? readFocusFeature(item.toObject()) : null;
     const actor = item?.actor;
     if (read?.kind !== "free-focus" || !actor) return null;
-    if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.freeFocusImmune === item.name)) { await say(actor, `<strong>${escapeHTML(item.name)}</strong>: ${escapeHTML(actor.name)} is temporarily immune.`); return { refused: "immune" }; }
+    if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.freeFocusImmune === item.name)) { noticeImmunity({ actor, blocked: item.name, why: "temporarily immune" }); await say(actor, `<strong>${escapeHTML(item.name)}</strong>: ${escapeHTML(actor.name)} is temporarily immune.`); return { refused: "immune" }; }
     const card = game.messages.contents.slice(-30).reverse().find(entry => entry.getFlag(MODULE_ID, "basicSaveState")?.sourceActorUuid === actor.uuid);
     const state = card?.getFlag(MODULE_ID, "basicSaveState");
     const attack = state?.saveStatistic === "spell-attack";
@@ -123,7 +124,7 @@ export async function bunOnCard(message) {
     const actor = item?.actor;
     if (read?.kind !== "bun" || !actor) return null;
     if (!(Number(pool(actor)?.max) > 0)) { await say(actor, `<strong>${escapeHTML(item.name)}</strong>: no effect without a focus pool.`); return { refused: "no pool" }; }
-    if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.bunImmune === item.name)) { await say(actor, `<strong>${escapeHTML(item.name)}</strong>: ${escapeHTML(actor.name)} is temporarily immune.`); return { refused: "immune" }; }
+    if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.bunImmune === item.name)) { noticeImmunity({ actor, blocked: item.name, why: "temporarily immune" }); await say(actor, `<strong>${escapeHTML(item.name)}</strong>: ${escapeHTML(actor.name)} is temporarily immune.`); return { refused: "immune" }; }
     const made = await shapeEffect(actor, actor, `${item.name}: revitalized`, [], { rounds: read.hours * 600, flags: { bunRevitalized: { name: item.name, immuneDays: read.immuneDays } }, description: "Restore a Focus Point as a single action (concentrate), once." });
     await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), flags: { [MODULE_ID]: { kind: "focus-card", bun: { actorUuid: actor.uuid, effectUuid: made?.uuid ?? null } } },
         content: `<section class="pf2e-auto-runtime-card"><p><strong>${escapeHTML(item.name)}</strong>: revitalized for ${read.hours} hour${read.hours === 1 ? "" : "s"}.</p><button type="button" data-pf2e-auto-focus-card="bun">Restore a Focus Point (1 action)</button></section>` });

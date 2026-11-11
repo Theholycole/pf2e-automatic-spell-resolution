@@ -103,6 +103,7 @@ import { startFollowingAura } from './form-aura-runtime.js';
 import { AFFLICTION_HANDLER, tempHPSourceId } from "./runtime-utils.js";
 import { stageCreatureFlag } from "./curse-creature.js";
 
+import { noticeImmunity, immunityWordsFor } from "./immunity-notice.js";
 const SAVE_SCHEMA = 9;
 const SAVE_OPTION_PREFIX = "pf2e-auto-basic-save";
 
@@ -158,6 +159,16 @@ function markSecondaryTargets(targets, constraints, secondary) {
 function assertPersistedTargetIdentity(target, actor) {
     if (actor && actor.uuid !== target.actorUuid) {
         throw new Error(`${target.name}: the persisted token now resolves to a different actor. Results were not applied.`);
+    }
+}
+
+// (2026-11-11) Targets a save card leaves out for an immunity (PF2e's, a damage immunity the spell needs, or its temporary one): the GM told.
+function noticeImmuneTargets(targets, spellName) {
+    for (const target of targets ?? []) {
+        if (target.eligible || !target.originalEligibility?.immune) continue;
+        let actor = null;
+        try { actor = fromUuidSync(target.actorUuid); } catch (_) { actor = null; }
+        noticeImmunity({ actor, target: target.name, blocked: spellName, why: target.eligibilityReason });
     }
 }
 
@@ -1429,10 +1440,10 @@ export function resolveRankCount(expression, rank) {
 
 async function handOffAffliction(state, target, actor, affliction = null) {
     const spellImmunity = actor.itemTypes.effect.find(effect => effect.flags?.[MODULE_ID]?.afflictionImmunity?.name === state.afflictionHandoff?.name);
-    if (spellImmunity) return {status: "immune", reason: `immune (${spellImmunity.name})`};
+    if (spellImmunity) { noticeImmunity({ actor, blocked: state.afflictionHandoff?.name ?? state.spellName, why: `temporarily immune (${spellImmunity.name})`, source: state.spellName }); return {status: "immune", reason: `immune (${spellImmunity.name})`}; }
     const immunity = state.afflictionHandoff?.immunity;
     const immuneTrait = immunity?.traits.find(trait => actor.traits?.has?.(trait) ?? actor.system?.traits?.value?.includes(trait));
-    if (immuneTrait) return {status: "immune", reason: `immune (${immuneTrait} trait)`};
+    if (immuneTrait) { noticeImmunity({ actor, blocked: state.afflictionHandoff?.name ?? state.spellName, why: `immune (${immuneTrait} trait)`, source: state.spellName }); return {status: "immune", reason: `immune (${immuneTrait} trait)`}; }
     if (!afflictionHandlerActive()) return {status: "manual", reason: "Pseudo Afflictions is not active"};
     const spell = await castSpellFromUuid(state);
     const sourceActor = await fromUuid(state.sourceActorUuid);
@@ -2304,6 +2315,7 @@ export class BasicSaveRuntime {
             : plan.resolution.degreeAdjustment?.predicate?.kind === "note-held"
                 ? { ...clone(plan.resolution.degreeAdjustment), predicate: { ...clone(plan.resolution.degreeAdjustment.predicate), sourceItemUuid: spell?.uuid ?? null } } : plan.resolution.degreeAdjustment ?? null;
         const targets = snapshotTargets(targetInputs, constraints, castAdjustment, plan.resolution.dualMode ?? null, plan.resolution.allySplit ? sourceActor : null, plan.resolution.traitGrant ?? null);
+        noticeImmuneTargets(targets, plan.source.name);
         // Shadow's Betrayal: the damage type of a Strike the one target could make (a weapon it wields or an unarmed attack), the caster's pick among
         // its types; chosen when the attack is made.
         let strikeType = null;
@@ -3454,6 +3466,7 @@ export class BasicSaveRuntime {
             state.allySplit ? await fromUuid(state.sourceActorUuid) : null, state.traitGrant ?? null);
         const existing = new Set(state.targets.map(target => target.actorUuid));
         const added = snapshots.filter(target => !existing.has(target.actorUuid));
+        noticeImmuneTargets(added, state.spellName);
         if (state.bolster) for (const target of added) if (target.eligible) target.bolster = { status: "pending" };
         if (state.traitVariant?.kind === "trait-rows") for (const target of added) {
             if (!target.eligible) continue;
@@ -4173,6 +4186,7 @@ export class BasicSaveRuntime {
             if (!targetParticipates(target) || target.eligibilityOverride?.eligible === true || target.secondaryOf || target.casterShare) continue;
             const eligibility = validateActorTarget(state.targetConstraints, actor);
             if (!eligibility.eligible) {
+                if (eligibility.immune) noticeImmunity({ actor, blocked: state.spellName, why: eligibility.reason });
                 target.eligible = false;
                 target.eligibilityReason = eligibility.reason;
                 target.applicationStatus = "unaffected";
@@ -4602,6 +4616,7 @@ export class BasicSaveRuntime {
                         }
                         damage = DamageRoll.fromData(json);
                         if (critical) target.weaponCritical = immune ? "immune to critical hits: the failure's damage" : "the weapon's critical damage";
+                        if (immune) noticeImmunity({ actor, target: target.name, blocked: `${state.spellName}'s critical damage`, why: "immune to critical hits; the failure's damage instead" });
                         if (!critical && multiplier !== 1) damage = damage.alter(multiplier, 0);
                     }
                     // "(this damage bypasses its resistances)": PF2e's own bypass option on the roll; its IWR marks each resistance ignored.
@@ -4849,6 +4864,8 @@ export class BasicSaveRuntime {
                             const rule = grantRules.find(candidate => candidate.flag === grant.ruleFlag);
                             const ignored = rule?.ignored === true;
                             if (!ignored) appliedConditions += 1;
+                            // (PF2e left the condition out — the creature is immune to it: the GM told.)
+                            else noticeImmunity({ actor, target: target.name, blocked: conditionLabel(grant.condition), why: immunityWordsFor(actor, grant.condition.slug), source: state.spellName });
                             target.conditionResults.push({
                                 slug: grant.condition.slug,
                                 label: conditionLabel(grant.condition),

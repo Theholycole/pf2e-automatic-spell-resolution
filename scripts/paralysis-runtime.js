@@ -1,6 +1,7 @@
 import {MODULE_ID} from './effect-runtime.js';
 import {clone} from './runtime-utils.js';
 import {turnAdvance,boundaryKey,addObligation} from './ongoing-core.js';
+import { noticeImmunity } from "./immunity-notice.js";
 const state=j=>j.getFlag(MODULE_ID,'ongoingCast');
 
 export async function finalizeParalysis(runtime,journal,card,saveState) {
@@ -18,6 +19,7 @@ export async function finalizeParalysis(runtime,journal,card,saveState) {
     target.conditionResults=[{label:target.degree==='criticalSuccess'?'Paralysis ended':target.degree==='success'?'Paralysis shortened by one round':'Paralysis duration unchanged',status:'applied',effectUuid:effect.uuid}];
    }else{
     const rounds={failure:1,criticalFailure:4}[target.degree]??0;
+    if(rounds&&actor.isImmuneTo('paralyzed'))noticeImmunity({actor,blocked:`Paralyzed (${rounds} round${rounds===1?'':'s'})`,why:'immune to paralyzed',source:'Paralyze'});
     if(!rounds||actor.isImmuneTo('paralyzed'))continue;
     const template=game.pf2e.ConditionManager.getCondition('paralyzed');
     const [effect]=await actor.createEmbeddedDocuments('Item',[{name:'Paralyze: Paralyzed',type:'effect',img:template.img,system:{

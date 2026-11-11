@@ -137,7 +137,14 @@ import { grappleSizeAt } from '../src/compiler/weapon-grapple.js';
 import { disbeliefPain } from "./disbelief-pain.js";
 import { suppressionSave } from "./suppression-save-runtime.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 export const MODULE_ID = "pf2e-automatic-resolution";
+
+// (2026-11-11) A cast refused because a creature is temporarily immune: the GM told (the core's immunity notice), then the error the caster sees.
+function immuneError(actor, spellName, message = null, token = null) {
+    noticeImmunity({ actor, token, blocked: spellName, why: "temporarily immune" });
+    return new Error(message ?? `${spellName}: ${actor?.name ?? "the creature"} is temporarily immune.`);
+}
 
 /** The food card: pieces left, when it withers, who has eaten, and an Eat button while any is left. */
 export function foodCardHTML(state) {
@@ -984,6 +991,7 @@ export class EffectRuntime {
         const immunity = plan.resolution.temporaryImmunity;
         if (immunity) {
             const immune = actors.filter(actor => actor.itemTypes.effect.some(item => item.flags?.[MODULE_ID]?.spellImmunity?.key === immunity.key));
+            for (const actor of immune) noticeImmunity({ actor, blocked: plan.source.name, why: "temporarily immune" });
             if (immune.length) throw new Error(`${plan.source.name}: ${immune.map(actor => actor.name).join(", ")} ${immune.length === 1 ? "is" : "are"} temporarily immune.`);
         }
         // Healing with an Effect: every recipient must be healable before anything is applied.
@@ -1594,7 +1602,7 @@ export class EffectRuntime {
         const data = plan.resolution.secretFlatCheck;
         const target = this.#singleTarget(plan, options, "1 creature other than you").actor;
         if (target === sourceActor) throw new Error(`${plan.source.name}: target a creature other than you.`);
-        if (target.itemTypes.effect.some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === plan.source.slug)) throw new Error(`${plan.source.name}: ${target.name} is temporarily immune.`);
+        if (target.itemTypes.effect.some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === plan.source.slug)) throw immuneError(target, plan.source.name);
         const roll = await new Roll("1d20").evaluate();
         const success = roll.total >= data.dc;
         const gm = game.users.filter(user => user.isGM).map(user => user.id);
@@ -2363,7 +2371,7 @@ export class EffectRuntime {
         let cheers = Number(flag.cheers ?? 0);
         for (const token of tokens) {
             const actor = token.actor;
-            if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.rallyImmune === caster.uuid)) { results.push({ name: actor.name, skipped: "immune" }); continue; }
+            if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.rallyImmune === caster.uuid)) { results.push({ name: actor.name, skipped: "immune" }); noticeImmunity({ actor, token, blocked: flag.spell, why: `temporarily immune to ${caster.name}'s ${flag.spell}` }); continue; }
             if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.rallyHold?.casterEffectUuid === effectDocument.uuid)) { results.push({ name: actor.name, skipped: "rebelling" }); continue; }
             let degree = degrees?.[actor.uuid] ?? ((willing ?? []).includes(actor.uuid) ? "failure" : null);
             const bonus = Math.max((opposed ?? []).includes(actor.uuid) ? data.opposed : 0, Math.min(data.cheer.max, cheers * data.cheer.per));
@@ -3052,6 +3060,7 @@ export class EffectRuntime {
             return { status: "immune", effectUuid: made.uuid };
         }
         if (shield) {
+            noticeImmunity({ actor, blocked: `${data.spellName}'s persistent bleed`, why: "immune until its next turn (it took the directed action)" });
             try { await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), content: `<p><strong>${escapeHTML(data.spellName)}</strong>: ${escapeHTML(actor.name)} took the prohibited action, but the directed action protects it this round.</p>` }); } catch (_) {}
             return { status: "immune" };
         }
@@ -3459,6 +3468,7 @@ export class EffectRuntime {
         }
         const slug = plan.source.slug ?? plan.source.name.toLowerCase().replace(/[^a-z]+/g, "-");
         if (data.immunity && recipient.itemTypes.effect.some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === slug)) {
+            noticeImmunity({ actor: recipient, blocked: plan.source.name, why: `gained it within the last ${data.immunity.hours} hour${data.immunity.hours === 1 ? "" : "s"}` });
             try { await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: sourceActor }), content: `<h3>${escapeHTML(plan.source.name)}</h3><p>${escapeHTML(recipient.name)} gained this bonus within the last ${data.immunity.hours} hour${data.immunity.hours === 1 ? "" : "s"}: no bonus this time.</p>${(data.notes ?? []).map(note => `<p>${escapeHTML(note)}</p>`).join("")}` }); } catch (_) {}
             return { status: "immune", plan };
         }
@@ -3589,7 +3599,7 @@ export class EffectRuntime {
             // (Immune after it — Dynamic Gouging Claw's claw: refused while immune, the immunity made with the Effect.)
             if (data.immunity) {
                 if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === data.immunity.key && !effect.isExpired))
-                    throw new Error(`${plan.source.name}: ${actor.name} is temporarily immune to it.`);
+                    throw immuneError(actor, plan.source.name, `${plan.source.name}: ${actor.name} is temporarily immune to it.`);
                 made.push(await createSpellImmunity(actor, data.immunity, plan.source.name, castInstanceId));
             }
             const effect = await this.#ruleEffect(actor, { name: chosen ? `${plan.source.name} (${chosen.label})` : plan.source.name, rules, seconds, sourceActor, itemOrSource, sustained: !!data.sustained, untilTurnEnd: data.untilTurnEnd === true,
@@ -4091,7 +4101,9 @@ export class EffectRuntime {
         const casterToken = sourceActor.getActiveTokens?.(true, false)?.[0];
         if (!casterToken) throw new Error(`${plan.source.name}: ${sourceActor.name} needs a token on the scene.`);
         const immune = actor => actor.itemTypes.effect.some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === plan.source.slug);
-        if (immune(sourceActor)) throw new Error(`${plan.source.name}: ${sourceActor.name} is temporarily immune.`);
+        if (immune(sourceActor)) throw immuneError(sourceActor, plan.source.name);
+        for (const token of canvas.tokens.placeables.filter(token => token.actor && token.actor !== sourceActor && sourceActor.isAllyOf?.(token.actor) && tokenDistance(casterToken, token) <= data.radius && immune(token.actor)))
+            noticeImmunity({ actor: token.actor, token, blocked: plan.source.name, why: "temporarily immune" });
         const allies = canvas.tokens.placeables.filter(token => token.actor && token.actor !== sourceActor && sourceActor.isAllyOf?.(token.actor) && tokenDistance(casterToken, token) <= data.radius && !immune(token.actor)).map(token => token.actor);
         const option = `${plan.source.slug}-performance-initiative`;
         const initiative = { key: "FlatModifier", selector: "initiative", type: data.initiative.type, value: data.initiative.value };
@@ -4300,7 +4312,7 @@ export class EffectRuntime {
         const allyToken = tokens.find(token => token.actor !== sourceActor && sourceActor.isAllyOf?.(token.actor)), enemyToken = tokens.find(token => token.actor !== sourceActor && !sourceActor.isAllyOf?.(token.actor));
         if (tokens.length !== 2 || !allyToken || !enemyToken) throw new Error(`${plan.source.name}: target 1 ally and 1 enemy.`);
         const enemy = enemyToken.actor, ally = allyToken.actor;
-        if (enemy.itemTypes.effect.some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === plan.source.slug)) throw new Error(`${plan.source.name}: ${enemy.name} is temporarily immune.`);
+        if (enemy.itemTypes.effect.some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === plan.source.slug)) throw immuneError(enemy, plan.source.name);
         const dcs = { will: Number(enemy.saves?.will?.dc?.value), deception: Number(enemy.skills?.deception?.dc?.value) };
         const dc = Math.max(...data.dcs.map(key => dcs[key]).filter(Number.isFinite));
         const roll = await sourceActor.perception.roll({ dc: { value: dc }, skipDialog: options.skipDialog ?? false });
@@ -4642,7 +4654,7 @@ export class EffectRuntime {
         const results = [];
         for (const token of tokens) {
             const actor = token.actor;
-            if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === data.slug)) { results.push({ actorUuid: actor.uuid, immune: true }); continue; }
+            if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === data.slug)) { results.push({ actorUuid: actor.uuid, immune: true }); noticeImmunity({ actor, token, blocked: data.spell, why: "temporarily immune" }); continue; }
             const roll = await actor.saves?.[mode.statistic]?.roll({ dc: { value: data.dc }, skipDialog: true, extraRollOptions: [`origin:item:slug:${data.slug}`] });
             const degree = Number(roll?.degreeOfSuccess ?? NaN);
             if (!Number.isInteger(degree)) throw new Error(`${data.spell}: ${actor.name}'s ${mode.statistic} save couldn't be rolled.`);
@@ -5829,6 +5841,7 @@ export class EffectRuntime {
             const actor = token.actor;
             const immune = (actor.attributes?.immunities ?? []).some(entry => traits.includes(entry.type));
             const dc = Number(actor.saves?.will?.dc?.value ?? NaN);
+            if (immune) noticeImmunity({ actor, token, blocked: "Frightened", why: `immune to ${(actor.attributes?.immunities ?? []).find(entry => traits.includes(entry.type))?.type ?? "it"}`, source: plan.source.name });
             if (immune || !Number.isFinite(dc)) { results.push({ name: actor.name, degree: null, frightened: 0 }); continue; }
             let degree = total - dc >= 10 ? 3 : total >= dc ? 2 : total - dc <= -10 ? 0 : 1;
             degree = Math.max(0, Math.min(3, degree + (natural === 20 ? 1 : natural === 1 ? -1 : 0)));
@@ -7502,7 +7515,7 @@ export class EffectRuntime {
         const actor = token.actor;
         const castRank = Number(options.castRank ?? itemOrSource?.rank ?? plan.rank);
         const key = `level-tiers:${plan.source.name}`;
-        if (actor.itemTypes.effect.some(item => item.flags?.[MODULE_ID]?.spellImmunity?.key === key)) throw new Error(`${plan.source.name}: ${actor.name} is temporarily immune.`);
+        if (actor.itemTypes.effect.some(item => item.flags?.[MODULE_ID]?.spellImmunity?.key === key)) throw immuneError(actor, plan.source.name);
         const level = Number(actor.level ?? actor.system?.details?.level?.value);
         const tier = levelTierAt(data, level, castRank);
         if (!tier) throw new Error(`${plan.source.name}: no outcome for level ${level}.`);
@@ -9730,6 +9743,7 @@ export class EffectRuntime {
                 return (state?.targets ?? []).filter(target => target.degree === "criticalSuccess").map(target => target.actorUuid);
             });
             const refused = tokens.filter(token => immune.includes(token.actor.uuid));
+            for (const token of refused) noticeImmunity({ actor: token.actor, token, blocked: `${data.spellName} (${phase.title})`, why: `critically succeeded; immune for ${phase.immunityRounds} round${phase.immunityRounds === 1 ? "" : "s"}` });
             if (refused.length) throw new Error(`${data.spellName}: ${refused.map(token => token.actor.name).join(", ")} critically succeeded and is immune for ${phase.immunityRounds} round${phase.immunityRounds === 1 ? "" : "s"}.`);
         }
         const castRank = Number(data.castRank);
@@ -10356,7 +10370,7 @@ export class EffectRuntime {
         const traits = target.actor.traits ?? new Set(target.actor.system?.traits?.value ?? []);
         if (!(traits.has?.(data.targetTrait) ?? traits.includes?.(data.targetTrait))) throw new Error(`${plan.source.name}: ${target.name} isn't ${data.targetTrait}.`);
         const key = plan.source.slug ?? plan.source.name;
-        if (target.actor.itemTypes.effect.some(effect => effect.flags?.[MODULE_ID]?.brandImmunity?.key === key)) throw new Error(`${plan.source.name}: ${target.name} is temporarily immune.`);
+        if (target.actor.itemTypes.effect.some(effect => effect.flags?.[MODULE_ID]?.brandImmunity?.key === key)) throw immuneError(target.actor, plan.source.name, `${plan.source.name}: ${target.name} is temporarily immune.`, target);
         const template = await loadNativeEffectTemplate(data.effect.uuid);
         if (!template) throw new Error(`${plan.source.name}: PF2e's ${data.effect.label} is unavailable.`);
         const scene = target.parent;
@@ -11569,7 +11583,7 @@ export class EffectRuntime {
         if (!actors.length) throw new Error(`${plan.source.name}: target the creature${data.target ? ` (${data.target})` : ""} before applying it.`);
         if (!subject && data.proof?.immunity) for (const actor of actors)
             if (actor.itemTypes?.effect?.some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === plan.source.slug && !effect.isExpired))
-                throw new Error(`${plan.source.name}: ${actor.name} is temporarily immune to it.`);
+                throw immuneError(actor, plan.source.name, `${plan.source.name}: ${actor.name} is temporarily immune to it.`);
         if (data.recipient === "target") {
             // (A heightened entry's larger count: "The spell can affect up to 6 willing creatures …".)
             // (No target line but an area, Girzanje's March's allies who hear it: the creatures the GM targets in the area.)

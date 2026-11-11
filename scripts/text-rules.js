@@ -7,6 +7,7 @@ import { levelDC } from "../src/compiler/check-helpers.js";
 import { timedTempHp, riderChoice } from "./spellshape-runtime.js";
 import { MODULE_ID } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const cache = new Map();
 
 /** The item's text reading, kept while its description and rules are unchanged. */
@@ -452,7 +453,7 @@ export async function actionCastOnCard(message) {
     }
     if (read.kind === "essence-strike") {
         // (Essence Strike: refused while immune to Sure Strike; the next spell attack roll this turn rolled twice, the better kept; then immune for 10 minutes.)
-        if ((actor.itemTypes?.effect ?? []).some(effect => /immune to Sure Strike/i.test(effect.name))) { await say(`${actor.name} is temporarily immune to Sure Strike.`); return { refused: "immune" }; }
+        if ((actor.itemTypes?.effect ?? []).some(effect => /immune to Sure Strike/i.test(effect.name))) { noticeImmunity({ actor, blocked: item.name, why: "temporarily immune to Sure Strike" }); await say(`${actor.name} is temporarily immune to Sure Strike.`); return { refused: "immune" }; }
         const combat = game.combat?.started ? game.combat : null;
         const start = { value: game.time.worldTime, initiative: combat?.combatant?.initiative ?? null };
         const made = await actor.createEmbeddedDocuments("Item", [
