@@ -11,6 +11,7 @@ import { applyDamageWithReceipt } from "./native-damage-receipt.js";
 import { ONGOING_FLAG } from "./ongoing-core.js";
 import { DamageRollClass, MODULE_ID, escapeHTML, post as say } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const isDead = actor => actor.statuses?.has?.("dead") || Number(actor.hitPoints?.value ?? 1) <= 0;
 const isUndead = actor => { const traits = actor.traits ?? new Set(actor.system?.traits?.value ?? []); return traits.has?.("undead") ?? traits.includes?.("undead"); };
 const recordOf = (ongoing, castId) => { const journal = castId ? ongoing.find(castId) : null; const record = journal?.getFlag(MODULE_ID, ONGOING_FLAG); return record?.status === "active" ? { journal, record } : null; };
@@ -167,7 +168,7 @@ export async function renewalPart({ caster, spell, data, phase, tokens }) {
     const out = [];
     for (const token of tokens) {
         const actor = token.actor;
-        if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.renewalImmune?.key === key && !effect.isExpired)) { out.push({ name: token.name, immune: true }); continue; }
+        if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.renewalImmune?.key === key && !effect.isExpired)) { out.push({ name: token.name, immune: true }); noticeImmunity({ actor, token, blocked: data.spellName, why: "temporarily immune" }); continue; }
         // ("detrimental effects that would be gone after 24 hours": Effects running out within the day that grant conditions or penalties — not a
         // running spell's, which keep their time.)
         const ongoingUuids = new Set(game.journal.contents.flatMap(journal => { const record = journal.getFlag(MODULE_ID, ONGOING_FLAG); return record?.status === "active" ? (record.entries ?? []).map(entry => entry.uuid) : []; }));

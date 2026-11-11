@@ -5,6 +5,7 @@ import { turnAdvance, addObligation, boundaryKey } from './ongoing-core.js';
 import { emptyConditionSavePlan, sickenedAfterRecovery, clingingIceSavePlan } from './condition-spell-core.js';
 import { conditionProfileDigest, CONDITION_PROFILE_HASHES, CONDITION_PROFILE_FIELDS, clingingIceEffectMechanics, CLINGING_ICE_EFFECT_MECHANICS } from './condition-spell-baseline.js';
 import { castSpellFromUuid, spellFromSource } from './cast-spell.js';
+import { noticeImmunity } from "./immunity-notice.js";
 const state = j => j.getFlag(MODULE_ID, 'ongoingCast');
 const IDS = { 'evil-eye': 'f45JpY7Ph2cAJGW2', fear: '4koZzrnMXhhosn0D', 'clinging-ice':'MraZBLJ4Be3ogmWL', paralyze:'DCQHaLrYXMI37dvW' };
 
@@ -121,7 +122,7 @@ export class ConditionSpellRuntime {
             if(!actor)throw Error('The condition recipient is unavailable.');
             let value=obligation.recovery ? sickenedAfterRecovery(condition?._source.system.value.value??0,target.degree,{spellActive:record.spellActive,visible:this.currentVisibility(record,recipient)})
                 : ((record.profile==='fear'?{success:1,failure:2,criticalFailure:3}:{failure:1,criticalFailure:2})[target.degree]??0);
-            if (!obligation.recovery && actor.isImmuneTo(record.profile==='fear'?'frightened':'sickened')) value = 0;
+            if (!obligation.recovery && value && actor.isImmuneTo(record.profile==='fear'?'frightened':'sickened')) { noticeImmunity({ actor, blocked: `${record.profile==='fear'?'Frightened':'Sickened'} ${value}`, why: `immune to ${record.profile==='fear'?'frightened':'sickened'}`, source: record.name ?? null }); value = 0; }
             changes.push({target,recipient,actor,condition,value});
         }
         record.status='applying';obligation.status='applying';await this.ongoing.save(journal,record);
@@ -141,6 +142,7 @@ export class ConditionSpellRuntime {
                 }
                 if(record.profile==='fear'&&target.degree==='criticalFailure'&&!obligation.recovery){
                     const template=game.pf2e.ConditionManager.getCondition('fleeing');
+                    if(actor.isImmuneTo(template)) noticeImmunity({ actor, blocked: 'Fleeing', why: 'immune to fleeing', source: record.name ?? 'Fear' });
                     if(!actor.isImmuneTo(template)){
                         const [effect]=await actor.createEmbeddedDocuments('Item',[{name:'Fear: Fleeing',type:'effect',img:template.img,system:{context:{origin:{actor:record.sourceActorUuid,item:record.sourceItemUuid},target:{actor:actor.uuid},roll:null},duration:{value:1,unit:'rounds',expiry:'turn-start'},start:{value:record.createdAt,initiative:record.casterInitiative??null},rules:[{key:'GrantItem',uuid:template._stats.compendiumSource,flag:'fleeing',allowDuplicate:true,onDeleteActions:{granter:'cascade',grantee:'cascade'}}]}}]);
                         if(!effect)throw Error('Fleeing application was not confirmed.');

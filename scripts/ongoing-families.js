@@ -24,6 +24,7 @@ import { spellAttack } from './attack-shapes-runtime.js';
 import { grantMinionControl } from './minion-control-runtime.js';
 import { disbeliefPain } from "./disbelief-pain.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 // The lantern's light: bright in the area, dim to its multiple.
 const lanternLightRule = (radius, light) => ({ key: "TokenLight", value: { bright: Number(radius) * light.brightTimes, dim: Number(radius) * light.dimTimes } });
 // Which of the lantern's rows a creature takes: living, undead, or none (a construct).
@@ -445,7 +446,7 @@ export class OngoingFamilies {
         await this.syncBlessed(data);
         await this.syncMemberCondition(data, members);
         await this.syncMemberEffect(data, members);
-        if (declaration.initial) for (const member of members.filter(entry => !this.heldBySpell(data, entry.actorUuid))) addObligation(data, { key: `lingering:initial:${member.actorUuid}`, kind: "membership",
+        if (declaration.initial) for (const member of members.filter(entry => !this.heldBySpell(data, entry.actorUuid, { notice: true }))) addObligation(data, { key: `lingering:initial:${member.actorUuid}`, kind: "membership",
             label: `Review ${member.name}'s exposure when ${item.name} was cast`, actorUuid: member.actorUuid, tokenUuid: member.tokenUuid });
         await this.ongoing.save(journal, data);
         await this.ongoing.activate(journal);
@@ -1388,7 +1389,10 @@ export class OngoingFamilies {
             if (!outcome) {
                 if (record.lanternAsked.includes(member.actorUuid)) continue;
                 // (Immune after an earlier save against this spell: not asked.)
-                if (lantern.immunity && (actor.itemTypes?.effect ?? []).some(effect => !effect.isExpired && effect.flags?.[MODULE_ID]?.spellImmunity?.key === lantern.immunity.key)) continue;
+                if (lantern.immunity && (actor.itemTypes?.effect ?? []).some(effect => !effect.isExpired && effect.flags?.[MODULE_ID]?.spellImmunity?.key === lantern.immunity.key)) {
+                    noticeImmunity({ actor, blocked: record.name, why: "temporarily immune after an earlier save against it", once: `${record.castId}:${member.actorUuid}:lantern` });
+                    continue;
+                }
                 record.lanternAsked.push(member.actorUuid);
                 const statistic = lantern.statistic[0].toUpperCase() + lantern.statistic.slice(1);
                 try { await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: caster }), flags: { [MODULE_ID]: { lanternSave: { castId: record.castId, actorUuid: member.actorUuid } } },
@@ -1860,9 +1864,10 @@ export class OngoingFamilies {
             const traits = actor.traits ?? new Set(actor.system?.traits?.value ?? []);
             if (save.exceptTrait && traits.has?.(save.exceptTrait)) return { total: 0, skipped: true };
             // ("this is a mental, visual effect": a creature immune to one of them is unaffected.)
-            if ((save.traits ?? []).some(trait => (actor.attributes?.immunities ?? []).some(immunity => immunity.type === trait))) return { total: 0, skipped: true, immune: true };
+            const immuneTrait = (save.traits ?? []).find(trait => (actor.attributes?.immunities ?? []).some(immunity => immunity.type === trait));
+            if (immuneTrait) { noticeImmunity({ actor, blocked: record.name, why: `immune to ${immuneTrait} effects` }); return { total: 0, skipped: true, immune: true }; }
             // ("it is then temporarily immune to this dazzling effect for 10 minutes": not again while the marker lasts.)
-            if (save.immunity && (actor.itemTypes?.effect ?? []).some(effect => !effect.isExpired && effect.flags?.[MODULE_ID]?.spellImmunity?.key === save.immunity.key)) return { total: 0, skipped: true, immune: true };
+            if (save.immunity && (actor.itemTypes?.effect ?? []).some(effect => !effect.isExpired && effect.flags?.[MODULE_ID]?.spellImmunity?.key === save.immunity.key)) { noticeImmunity({ actor, blocked: record.name, why: "temporarily immune after an earlier save against it" }); return { total: 0, skipped: true, immune: true }; }
             const roll = await actor.saves?.[save.statistic]?.roll({ dc: { value: Number(save.dc) }, item: spell ?? undefined, skipDialog: true, ...(save.traits?.length ? { traits: [...save.traits] } : {}) });
             const degree = Number(roll?.degreeOfSuccess ?? -1);
             if (degree < 0) throw Error(`${actor.name}'s save wasn't rolled.`);
@@ -2161,12 +2166,16 @@ export class OngoingFamilies {
     /** Removes this area's leave-area Effects from every creature not inside (all of them when `inside` is null). */
     /** "A creature currently Fascinated by hypnotize doesn't attempt new saves.": it holds that condition from this spell's save (or this
      *  spell's temporary immunity). */
-    heldBySpell(record, actorUuid) {
+    heldBySpell(record, actorUuid, { notice = false } = {}) {
         // (One condition, or several: Gluttonous Growth's "unless it's already Grabbed or Restrained".)
         const slugs = record.declaration?.skipWhile?.slugs ?? (record.declaration?.skipWhile?.slug ? [record.declaration.skipWhile.slug] : []), immunityKey = record.declaration?.immunityKey;
         if (!slugs.length && !immunityKey) return false;
         let actor = null; try { actor = fromUuidSync(actorUuid); } catch (_) {}
-        if (immunityKey && (actor?.itemTypes?.effect ?? []).some(effect => !effect.isExpired && effect.flags?.[MODULE_ID]?.spellImmunity?.key === immunityKey)) return true;
+        if (immunityKey && (actor?.itemTypes?.effect ?? []).some(effect => !effect.isExpired && effect.flags?.[MODULE_ID]?.spellImmunity?.key === immunityKey)) {
+            // (2026-11-11: the GM told, unless it's a disbelief already made.)
+            if (notice && !record.declaration?.disbelief?.key) noticeImmunity({ actor, blocked: record.name, why: "temporarily immune to this spell", once: `${record.castId}:${actorUuid}:immune` });
+            return true;
+        }
         return slugs.some(slug => actor?.hasCondition?.(slug) && (actor.itemTypes?.effect ?? []).some(effect => { const held = effect.flags?.[MODULE_ID]?.outcomeEffect;
             return held && held.sourceItemUuid === record.sourceItemUuid && (held.conditions ?? []).some(condition => condition.slug === slug); }));
     }
@@ -2426,7 +2435,7 @@ export class OngoingFamilies {
             if ((actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.leaveArea?.castId === record.castId && (effect.flags[MODULE_ID].leaveArea.slot ?? 0) === slot)) continue;
             // (Only a creature ending its turn inside — the turn that just ended; not one that used the resistance in the last 10 minutes.)
             if (member.turnEnd && record.turnEndedActor !== actorUuid) continue;
-            if (member.shieldUse && (actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === member.shieldUse.immunityKey && !effect.isExpired)) continue;
+            if (member.shieldUse && (actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === member.shieldUse.immunityKey && !effect.isExpired)) { noticeImmunity({ actor, blocked: record.name, why: "used it within its immunity time", once: `${record.castId}:${actor.uuid}:shield-use:${slot}` }); continue; }
             // (A generated Effect — Rallying Banner's bonuses — instead of PF2e's.)
             if (member.generated) {
                 const [effect] = await actor.createEmbeddedDocuments("Item", [{ name: `${record.name}: ${member.generated.name}`, type: "effect", img: "icons/svg/banner.svg",
@@ -2900,7 +2909,7 @@ export class OngoingFamilies {
                     hazardHits.push({ member, event });
                     return;
                 }
-                if (exposedThisRound(member.actorUuid) || this.heldBySpell(record, member.actorUuid)) return;
+                if (exposedThisRound(member.actorUuid) || this.heldBySpell(record, member.actorUuid, { notice: true })) return;
                 // "the first time a creature enters … each round": one enter exposure per creature per round.
                 if (event === "enter" && record.declaration.enterOncePerRound && record.obligations.some(o => o.kind === "membership" && o.actorUuid === member.actorUuid
                     && o.key.startsWith(`lingering:enter:${clock.combatId}:${clock.round}:`))) return;
@@ -3241,7 +3250,7 @@ export class OngoingFamilies {
             const added = [], refused = [];
             for (const token of tokens) {
                 const member = members.find(candidate => candidate.tokenUuid === token.uuid) ?? { actorUuid: token.actor.uuid, tokenUuid: token.uuid, name: token.name };
-                if (this.heldBySpell(record, member.actorUuid)) { refused.push({ tokenUuid: token.uuid, reason: record.declaration.skipWhile ? `already ${record.declaration.skipWhile.slugs?.join(" or ") ?? record.declaration.skipWhile.slug}` : "immune to this casting" }); continue; }
+                if (this.heldBySpell(record, member.actorUuid, { notice: true })) { refused.push({ tokenUuid: token.uuid, reason: record.declaration.skipWhile ? `already ${record.declaration.skipWhile.slugs?.join(" or ") ?? record.declaration.skipWhile.slug}` : "immune to this casting" }); continue; }
                 const key = `lingering:gm-action:${round}:${member.actorUuid}`;
                 if (record.obligations.some(o => o.key === key)) { refused.push({ tokenUuid: token.uuid, reason: "already exposed for this action" }); continue; }
                 addObligation(record, { key, kind: "membership", round, event: "gm-action",

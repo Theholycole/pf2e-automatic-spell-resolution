@@ -118,11 +118,11 @@ export function validateActorTarget(constraints, actor) {
     // the cast-time options so later source deletion cannot erase eligibility.
     if (constraints.spellRollOptions?.length && actor?.isImmuneTo?.({
         parent: null, getRollOptions: () => constraints.spellRollOptions
-    })) return {eligible:false,reason:'immune to this spell according to PF2e'};
+    })) return {eligible:false,reason:'immune to this spell according to PF2e',immune:true};
     if (constraints.spellImmunityKey && [...(actor?.items ?? [])].some(item =>
         item.type === 'effect' && !item.isExpired
         && item.flags?.['pf2e-automatic-resolution']?.spellImmunity?.key === constraints.spellImmunityKey)) {
-        return { eligible: false, reason: 'temporarily immune to this spell' };
+        return { eligible: false, reason: 'temporarily immune to this spell', immune: true };
     }
     const traits = actorTraits(actor);
     for (const predicate of constraints.predicates ?? []) {
@@ -150,7 +150,7 @@ export function validateActorTarget(constraints, actor) {
         }
         // "a creature that isn't immune to spirit damage": PF2e's immunities.
         if (predicate.kind === "not-immune-damage" && [...(actor?.attributes?.immunities ?? actor?.system?.attributes?.immunities ?? [])].some(immunity => immunity?.type === predicate.damageType)) {
-            return { eligible: false, reason: `immune to ${predicate.damageType} damage` };
+            return { eligible: false, reason: `immune to ${predicate.damageType} damage`, immune: true };
         }
         // "1 dying creature": PF2e's Dying condition.
         if (predicate.kind === "condition" && !(actor?.hasCondition?.(predicate.slug) ?? [...(actor?.items ?? [])].some(item => item.type === "condition" && item.slug === predicate.slug))) {

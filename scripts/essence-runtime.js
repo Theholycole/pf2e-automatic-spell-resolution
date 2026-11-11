@@ -10,6 +10,7 @@
 import { riderChoice, shapeEffect, timedTempHp, castTargetActors } from "./spellshape-runtime.js";
 import { MODULE_ID, activeGM, escapeHTML, plainText } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const actionsOf = spell => String(spell?.system?.time?.value ?? "");
 
 /** The actor's essence pool (Magic+'s special resource), or null. */
@@ -453,6 +454,7 @@ async function essenceImmunity(actor, spell, message) {
     const targets = castTargetActors(message, actor);
     const immune = targets.filter(target => (target.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.spellImmunity?.key === key));
     if (immune.length) {
+        for (const target of immune) noticeImmunity({ actor: target, blocked: spell.name, why: `temporarily immune to ${actor.name}'s ${spell.name} (cast within a day)` });
         await message.setFlag(MODULE_ID, "targetMisses", [...new Set([...(message.getFlag(MODULE_ID, "targetMisses") ?? []), ...immune.map(target => target.uuid)])]);
         await say(actor, `<p><strong>${escapeHTML(spell.name)}</strong>: ${escapeHTML(immune.map(target => target.name).join(", "))} ${immune.length === 1 ? "is" : "are"} temporarily immune to it (cast by ${escapeHTML(actor.name)} within a day).</p>`);
     }

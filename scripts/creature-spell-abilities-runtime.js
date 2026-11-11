@@ -18,6 +18,7 @@ import { castTargetActors } from "./spellshape-runtime.js";
 import { tokenDistance } from "./token-distance.js";
 import { DEGREES, MODULE_ID, activeGM, castRankOf, escapeHTML, gmIds, isCastMessage, degreeOf } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const plain = html => String(html ?? "").replace(/\[\[\/r [^\]]+\]\]\{([^}]+)\}/g, "$1").replace(/@UUID\[[^\]]+\]\{([^}]+)\}/g, "$1").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 /** A creature ability's rule on spells, from its text: { type, ... } or null. */
@@ -118,6 +119,7 @@ export async function creatureAbilitiesOnCast(message) {
             const misses = [...new Set([...(message.getFlag(MODULE_ID, "targetMisses") ?? []), actor.uuid])];
             await message.setFlag(MODULE_ID, "targetMisses", misses);
             try { await ChatMessage.create({ speaker: message.speaker, content: `<p><strong>${escapeHTML(spell.name)}</strong> doesn't affect ${escapeHTML(actor.name)} (${escapeHTML(ability.name)}: immune to spells from a magic item).</p>` }); } catch (_) {}
+            noticeImmunity({ actor, blocked: spell.name, why: `${ability.name}: immune to spells from a magic item` });
             done.push({ [ability.name]: "immune" });
         }
     }

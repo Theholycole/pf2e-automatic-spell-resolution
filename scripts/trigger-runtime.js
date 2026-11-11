@@ -19,6 +19,7 @@ import { tokenDistance } from "./token-distance.js";
 import { lastDamageOf } from "./climb-aid-runtime.js";
 import { DEGREES, DamageRollClass, MODULE_ID, activeGM, escapeHTML } from "./runtime-utils.js";
 
+import { noticeImmunity } from "./immunity-notice.js";
 const tokenOf = actor => actor?.getActiveTokens?.(true, true)?.[0] ?? null;
 const say = (actor, content, whisper = false) => ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), content, ...(whisper ? { whisper: game.users.filter(user => user.isGM).map(user => user.id) } : {}) }).catch(() => null);
 const recordOf = (ongoing, castId) => { const journal = castId ? ongoing.find(castId) : null; const record = journal?.getFlag(MODULE_ID, ONGOING_FLAG); return record?.status === "active" ? { journal, record } : null; };
@@ -114,7 +115,7 @@ export async function linkOnDamage({ ongoing, actor, amount }) {
     if (!target) return end("target-missing");
     const casterToken = tokenOf(actor), targetToken = tokenOf(target);
     if (casterToken && targetToken && tokenDistance(casterToken, targetToken) > link.range) { await say(actor, `<p><strong>${escapeHTML(link.spell)}</strong> ends: ${escapeHTML(target.name)} is more than ${link.range} feet away.</p>`); return end("out-of-range"); }
-    if (link.immuneUntil != null && game.time.worldTime < link.immuneUntil) return { immune: true };
+    if (link.immuneUntil != null && game.time.worldTime < link.immuneUntil) { noticeImmunity({ actor: target, blocked: link.spell, why: `temporarily immune for ${link.immunityRounds} round${link.immunityRounds === 1 ? "" : "s"} after its last save` }); return { immune: true }; }
     const { types } = await damageMessageSince(actor, since);
     const spell = await fromUuid(link.sourceItemUuid);
     const result = await rollSave(target, link.statistic, link.dc, spell);
@@ -315,6 +316,7 @@ export async function deathMarkPart({ ongoing, caster, spell, data, token, optio
     const traits = actor.traits ?? new Set(actor.system?.traits?.value ?? []);
     const has = trait => traits.has?.(trait) ?? traits.includes?.(trait);
     if (Number(actor.hitPoints?.value ?? 0) <= 0 || actor.statuses?.has?.("dead") || has("undead") || has("construct")) throw new Error(`${data.spellName}: ${token.name} isn't alive.`);
+    if (deathImmune(actor, key)) noticeImmunity({ actor, token, blocked: data.spellName, why: "temporarily immune" });
     if (deathImmune(actor, key)) throw new Error(`${data.spellName}: ${token.name} is temporarily immune.`);
     const [effect] = await actor.createEmbeddedDocuments("Item", [{ name: `${data.spellName}: marked by ${caster.name}`, type: "effect", img: spell.img ?? "icons/svg/skull.svg",
         flags: { [MODULE_ID]: { deathMark: { castId: data.lastingCastId } } },
@@ -336,7 +338,7 @@ export async function wordPart({ ongoing, caster, spell, data, phase, token, opt
             description: { value: `<p>Temporarily immune ${kind === "all" ? "" : "to being killed by it "}for ${phase.immuneHours} hours.</p>` } } }]);
     // ("temporarily immune for 24 hours against being killed": a critical failure then deals the failure's result instead.)
     const killImmune = (actor.itemTypes?.effect ?? []).some(effect => effect.flags?.[MODULE_ID]?.deathImmunity?.key === key && effect.flags[MODULE_ID].deathImmunity.kind === "death");
-    if (degree === "criticalFailure" && killImmune) degree = "failure";
+    if (degree === "criticalFailure" && killImmune) { degree = "failure"; noticeImmunity({ actor, token, blocked: `${data.spellName}'s critical failure (death)`, why: "temporarily immune to being killed by it; the failure's result instead" }); }
     const hurt = async (row, perRank) => {
         const now = Number(actor.getCondition?.(row.slug)?.value ?? 0);
         if (now < row.value) await actor.increaseCondition(row.slug, { value: row.value - now });
